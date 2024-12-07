@@ -37,7 +37,9 @@ class TranslationBackend:
                 pass
 
         self.previous_tokens = None
-        self.stable_prefix = None
+        self.buffer_tokens = None
+        self.stable_prefix_tokens = None
+        self.n_remaining_input_punctuation = 0
     
     def simple_translation(self, text):
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
@@ -64,6 +66,15 @@ class TranslationBackend:
             )
         return generated_tokens
 
+    def has_sentence_end_token(self, tokens):
+        last_sentence_end = -1
+        for i in range(len(tokens[0])):
+            if tokens[0][i].item() in self.sentence_end_token_ids:
+                last_sentence_end = i
+        return last_sentence_end
+        
+        
+
     def compute_common_prefix_tokens(
         self, new_tokens
     ):
@@ -75,14 +86,16 @@ class TranslationBackend:
         else:
             common_length = min(len(self.previous_tokens[0]), len(new_tokens[0]))
 
-        last_sentence_end = -1
-        for i in range(common_length):
-            if new_tokens[0][i].item() in self.sentence_end_token_ids:
-                last_sentence_end = i
+
+        last_sentence_end = self.has_sentence_end_token(new_tokens[:, :common_length])
 
         if last_sentence_end >= 0:
-            return new_tokens[:, :last_sentence_end]
-
+            if self.n_remaining_input_punctuation > 0:
+                print(f"\033[33mEOS detected. Remaining punctuation: {self.n_remaining_input_punctuation}\033[0m")
+                self.n_remaining_input_punctuation -= 1
+            else:
+                print("\033[31mPrefix cut\033[0m")
+                return new_tokens[:, :last_sentence_end]
         return new_tokens[:, :common_length]
     
     def translate(self, text: str) -> str:
@@ -91,11 +104,12 @@ class TranslationBackend:
         if word_count < 3:
             return "", ""
     
-        inputs = self.tokenizer(text, return_tensors="pt").to(self.device)            
+        inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
+        self.n_remaining_input_punctuation += (self.has_sentence_end_token(inputs['input_ids']) != -1)
         with torch.no_grad():
             encoder_outputs = self.model.get_encoder()(**inputs)
         
-        if (self.previous_tokens is not None and self.stable_prefix is not None):
+        if (self.previous_tokens is not None and self.stable_prefix_tokens is not None):
             translation_tokens = self._continue_generation_with_cache(
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
             )
@@ -106,19 +120,21 @@ class TranslationBackend:
                     attention_mask=inputs['attention_mask'],
                 )
         if self.previous_tokens is not None:
-            self.stable_prefix = self.compute_common_prefix_tokens(new_tokens=translation_tokens)
+            self.stable_prefix_tokens = self.compute_common_prefix_tokens(new_tokens=translation_tokens)
         self.previous_tokens = translation_tokens
+        self.buffer_tokens = translation_tokens[0][len(self.stable_prefix_tokens[0]) if self.stable_prefix_tokens is not None else 0:]
+        
         
         buffer = self.tokenizer.decode(
-                translation_tokens[0], 
+                self.buffer_tokens, 
                 skip_special_tokens=True
         )        
-        if self.stable_prefix is not None:
+        if self.stable_prefix_tokens is not None:
             stable_translation = self.tokenizer.decode(
-                self.stable_prefix[0], 
+                self.stable_prefix_tokens[0], 
                 skip_special_tokens=True
             )
-            return stable_translation, buffer[len(stable_translation):]            
+            return stable_translation, buffer
         else:
             return "", buffer
 
@@ -136,7 +152,7 @@ class TranslationBackend:
             )
 
             decoder_out = self.model.model.decoder(
-                input_ids=self.stable_prefix,
+                input_ids=self.stable_prefix_tokens,
                 encoder_hidden_states=encoder_hidden_states,
                 past_key_values=past_key_values,
                 use_cache=True,
@@ -146,7 +162,7 @@ class TranslationBackend:
             prefix_logits = self.model.lm_head(decoder_out.last_hidden_state)
             next_token_id = torch.argmax(prefix_logits[:, -1, :], dim=-1).unsqueeze(-1)
 
-            generated_tokens = self.stable_prefix.clone()
+            generated_tokens = self.stable_prefix_tokens.clone()
 
             for _ in range(max_new_tokens):
                 if next_token_id.item() == eos_token_id:
@@ -170,83 +186,52 @@ class TranslationBackend:
 
 
 if __name__ == '__main__':
-    # src_texts = [
-    #     "Have you noticed how accurate",
-    #     "LLM are now that GPU have became more powerful, ",
-    #     "especially when we think at the difficulties we had in the 2010 era",
-    #     "where online chatbots were not performant",
-    #     "at all, and ofter doing strict rules worked better",
-    #     "do you remember that era?"]
-
-#     src_texts = [
-#         "As-tu remarqué à quel point",
-#         "les LLM sont précis maintenant que les GPU sont devenus plus puissants, ",
-#         "surtout quand on pense aux difficultés qu'on avait dans les années 2010",
-#         "où les chatbots en ligne n'étaient pas performants",
-#         "du tout, et souvent faire des règles strictes fonctionnait mieux.",
-#         "Tu te souviens de cette époque, ",
-#         "c'était bien plus compliqué de travailler"]
-
+    from nllw.test_strings import *
+    import pandas as pd
     translation_backend = TranslationBackend(source_lang='fra_Latn', target_lang="eng_Latn")
-    
-#     # for i in range(len(src_texts)+1):
-#     #     translation, buffer = translation_backend.translate(" ".join(src_texts[:i]))
-#     #     print(translation, '|', buffer)
+    # input_text = " ".join(src_2_fr)
+    src_texts = src_2_fr 
 
-#     tokens, text = translation_backend.simple_translation("Ceci est un test de traduction. Nous avons fait tout notre possible. Jusqu'à partir de 0")[1]
-    
-#     # text = "Ceci est un test de traduction. Nous avons fait tout notre possible. Jusqu'à partir de 0, où nous avions pris la route, tout droit, et loin, loin, loin ! tu penses qu'on peut vraiment faire la longeur qu'on veut ?"
-#     print(output_text) 
-    
-
-    src_texts = ["Il s’arrêtait par moments devant une villa",
-    "coquettement nichée dans la verdure, il regardait",
-    "par la grille et voyait au loin des femmes",
-    "élégantes sur les balcons et les terrasses, des",
-    "enfants couraient dans les jardins. Il s’intéressait",
-    "surtout aux fleurs ; c’étaient elles qui attiraient",
-    "particulièrement ses regards. De temps en temps,"
-    "il voyait passer des cavaliers, des amazones et de"
-    "belles voitures ; il les suivait d’un œil curieux et",
-    "les oubliait avant qu’ils eussent disparu. "]
-
-    text = " ".join(src_texts)
-    
-
-    target = """He would stop occasionally in front of a villa
-    nestled charmingly in the greenery, look
-    through the gate, and see elegant women
-    on balconies and terraces in the distance,
-    children running in the gardens. He was particularly interested
-    in the flowers; they were what caught his eye. From time to time, 
-    he would see horsemen, horsewomen, and beautiful carriages passing by; 
-    he would follow them with a curious eye and
-    forget them before they had disappeared.
-    """
-    l_vals = []
-    for i in range(1, len(src_texts)+1):
+    l_vals_with_cache = []
+    for i in range(1, len(src_texts) + 1):
         truncated_text = " ".join(src_texts[:i])
-        input_tokens = translation_backend.tokenizer(truncated_text, return_tensors="pt").to(translation_backend.device)
-        encoder_outputs = translation_backend.model.get_encoder()(**input_tokens)
-        output_tokens = translation_backend.model.generate(
-            encoder_outputs=encoder_outputs,
-            forced_bos_token_id=translation_backend.bos_token_id
-        )
-        output_text = translation_backend.tokenizer.decode(output_tokens[0], skip_special_tokens=True)
-        l_vals.append(
-            {
-                "input": truncated_text,
-                "output_tokens_shape": output_tokens.shape[1], 
-                "output_text": output_text,
-            }
-        )
-    # input_tokens = translation_backend.tokenizer(text, return_tensors="pt").to(translation_backend.device)
-    # encoder_outputs = translation_backend.model.get_encoder()(**input_tokens)
-    # output_tokens = translation_backend.model.generate(
-    #     encoder_outputs=encoder_outputs,
-    #     forced_bos_token_id=translation_backend.bos_token_id
-    # )
-    # output_text = translation_backend.tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+        stable_translation, buffer = translation_backend.translate(truncated_text)
+        print(f'{i}/{len(src_texts) + 1}: \033[36m{truncated_text}\033[0m')
+        print(f'\033[32m{stable_translation}\033[0m \033[35m{buffer}\033[0m')
+        
+        full_output = stable_translation + buffer
+        l_vals_with_cache.append({
+            "input": truncated_text,
+            "stable_translation": stable_translation,
+            "buffer_tokens": translation_backend.buffer_tokens,
+            "stable_prefix_tokens": translation_backend.stable_prefix_tokens,
+            "input_word_count": len(truncated_text.split()),
+            "stable_word_count": len(stable_translation.split()) if stable_translation else 0,
+            "total_output_word_count": len(full_output.split()) if full_output else 0
+        })
+    pd.DataFrame(l_vals_with_cache).to_pickle('export_with_tokens.pkl')
 
-    
-    print('end')
+    # l_vals = []
+    # for i in range(1, len(src_texts)+1):
+    #     truncated_text = " ".join(src_texts[:i])
+    #     input_tokens = translation_backend.tokenizer(truncated_text, return_tensors="pt").to(translation_backend.device)
+    #     encoder_outputs = translation_backend.model.get_encoder()(**input_tokens)
+    #     output_tokens = translation_backend.model.generate(
+    #         encoder_outputs=encoder_outputs,
+    #         forced_bos_token_id=translation_backend.bos_token_id
+    #     )
+    #     output_text = translation_backend.tokenizer.decode(output_tokens[0], skip_special_tokens=True)
+    #     l_vals.append(
+    #         {
+    #             "input": truncated_text,
+    #             "output_tokens_shape": output_tokens.shape[1], 
+    #             "output_text": output_text,
+    #         }
+    #     )
+    # # input_tokens = translation_backend.tokenizer(text, return_tensors="pt").to(translation_backend.device)
+    # # encoder_outputs = translation_backend.model.get_encoder()(**input_tokens)
+    # # output_tokens = translation_backend.model.generate(
+    # #     encoder_outputs=encoder_outputs,
+    # #     forced_bos_token_id=translation_backend.bos_token_id
+    # # )
+    # # output_text = translation_backend.tokenizer.decode(output_tokens[0], skip_special_tokens=True)
