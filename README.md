@@ -11,3 +11,21 @@
 Based on [NLLB](https://arxiv.org/abs/2207.04672). Uses [LocalAgreement policy](https://www.isca-archive.org/interspeech_2020/liu20s_interspeech.pdf). [HuggingFace transformers](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSeq2SeqLM) implementation only.
 
 Built for [WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit)
+
+---
+
+## Quick Start
+
+```bash
+# Textual console interface
+textual run --dev textual_interface.py
+```
+
+## Lack of stability:
+
+<p align="center">
+<img src="correlation_input.png"width="730">
+</p>
+
+- Prediction without reusing prefix tends to follow input length, but sometimes reaches constant level for few iterations
+- Predictions with prefix tends to stagnate after 5 it

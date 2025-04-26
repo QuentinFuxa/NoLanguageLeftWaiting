@@ -11,8 +11,8 @@ class TranslationApp(App):
     
     CSS = """
     #main-container {
-        height: auto;
         padding: 1;
+        background: white;
     }
     #input-label {
         margin-bottom: 1;
@@ -55,7 +55,6 @@ class TranslationApp(App):
         self.current_input_text = ""
             
     def compose(self) -> ComposeResult:
-        yield Header()
         with Container(id="main-container"):
             yield Static("Input:", id="input-label")
             yield Input(
@@ -66,7 +65,6 @@ class TranslationApp(App):
             yield Static(id="output")
             yield Static("Debug Output:", id="debug-label")
             yield Static(id="debug-output")
-        yield Footer()
     
     def on_mount(self) -> None:
         self._load_backend()
@@ -156,7 +154,7 @@ class TranslationApp(App):
             
             output = stable_translation
             if buffer:
-                output += f"[green]{buffer}[/]"
+                output += f"[grey]{buffer}[/]"
             
             self.query_one("#output", Static).update(output)
             
