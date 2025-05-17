@@ -6,7 +6,7 @@ from typing import Tuple, Optional
 
 
 class TranslationBackend:
-    def __init__(self, source_lang, target_lang, model_name: str = "facebook/nllb-200-distilled-1.3B"):
+    def __init__(self, source_lang, target_lang, model_name: str = "facebook/nllb-200-distilled-600M"):
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_lang)
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -37,7 +37,7 @@ class TranslationBackend:
     ):
         for i in range(min(len(self.previous_tokens[0]), len(new_tokens[0]))):
             if self.previous_tokens[0][i] != new_tokens[0][i]:
-                return new_tokens[:i]
+                return new_tokens[:, :i]
         return self.previous_tokens
     
     def translate(self, text: str) -> str:

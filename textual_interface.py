@@ -2,6 +2,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Vertical
 from textual.widgets import Input, Static, Header, Footer
 from textual.reactive import reactive
+from textual.worker import Worker, WorkerState
 from translation_backend import TranslationBackend
 
 
@@ -24,6 +25,15 @@ class TranslationApp(App):
         padding: 1;
         min-height: 3;
     }
+    #debug-label {
+        margin-top: 2;
+        margin-bottom: 1;
+    }
+    #debug-output {
+        padding: 1;
+        min-height: 3;
+        border: solid $primary;
+    }
     """
     
     BINDINGS = [
@@ -40,6 +50,9 @@ class TranslationApp(App):
         self.backend_loading = False
         self.last_words_count = 0
         self.theme = "catppuccin-latte"
+        self.current_worker = None
+        self.debug_log = []
+        self.current_input_text = ""
             
     def compose(self) -> ComposeResult:
         yield Header()
@@ -51,6 +64,8 @@ class TranslationApp(App):
             )
             yield Static("Output:", id="output-label")
             yield Static(id="output")
+            yield Static("Debug Output:", id="debug-label")
+            yield Static(id="debug-output")
         yield Footer()
     
     def on_mount(self) -> None:
@@ -84,42 +99,78 @@ class TranslationApp(App):
     def on_input_changed(self, event: Input.Changed) -> None:
         input_text = event.value
         
-        processed_text = self.process_text(input_text)
+        if self.current_worker is not None and self.current_worker.state == WorkerState.RUNNING:
+            self.current_worker.cancel()
         
-        if processed_text:
-            self.query_one("#output", Static).update(processed_text)
+        if not self._should_translate(input_text):
+            status_text = self._get_status_text(input_text)
+            if status_text:
+                self.query_one("#output", Static).update(status_text)
+        else:
+            self.current_input_text = input_text
+            self.current_worker = self.run_worker(
+                lambda: self._translate_async(input_text),
+                thread=True,
+                exclusive=True
+            )
     
-    def process_text(self, text: str) -> str:
+    def _should_translate(self, text: str) -> bool:
+        if not text or self.backend_loading or self.backend is None:
+            return False
+        
+        word_count = len(text.strip().split())
+        if word_count < 3:
+            return False
+        
+        if text.endswith(' '):
+            if word_count >= self.last_words_count + 1:
+                self.last_words_count = word_count
+                return True
+        
+        return False
+    
+    def _get_status_text(self, text: str) -> str:
         if not text:
             return "[dim italic]Waiting for text...[/]"
         
         if self.backend_loading:
             return "[yellow]Loading model...[/]"
         
-        should_translate = False
         word_count = len(text.strip().split())
         if word_count < 3:
             return f"[dim italic]Type at least 3 words to start translation... ({word_count}/3)[/]"
         
-        if text.endswith(' '):
-            self.log('BBB:', str(text))
-            if word_count >= self.last_words_count + 3: 
-                should_translate = True
+        return None
+    
+    def _translate_async(self, text: str) -> tuple:
+        stable_translation, buffer = self.backend.translate(text)
+        return stable_translation, buffer, text
+    
+    def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
+        """Handle worker state changes and update UI with results."""
+        if event.state == WorkerState.SUCCESS:
+            stable_translation, buffer, original_text = event.worker.result            
             
-        if should_translate:
-            self.log('Text ready to be translated:', text)
-            stable_translation, buffer = self.backend.translate(text)
-                        
-            self.last_words_count = len(text.strip().split())
             if not stable_translation and not buffer:
-                return None
+                return
             
             output = stable_translation
             if buffer:
-                output += f"[#808080]{buffer}[/]"
+                output += f"[green]{buffer}[/]"
             
-            return output            
-        return None
+            self.query_one("#output", Static).update(output)
+            
+            # Update debug output
+            debug_entry = f"{original_text}: {stable_translation} | {buffer}"
+            self.debug_log.append(debug_entry)
+            debug_text = "\n".join(self.debug_log)
+            self.query_one("#debug-output", Static).update(debug_text)
+        elif event.state == WorkerState.ERROR:
+            self.log(f"Translation error: {event.worker.error}")
+            self.query_one("#output", Static).update("[red]Translation error[/]")
+        elif event.state == WorkerState.CANCELLED:
+            self.log("Translation cancelled")
+    
 
 def main():
     """Application entry point."""
