@@ -4,7 +4,7 @@
 <img src="architecture_NLLW.png"width="730">
 </p>
 
-**Streaming translation for 200 languages, using NLLB models with KV-cache reuse strategies for real-time applications**
+**Streaming translation for 200 languages, using NLLB models with tokens reuse strategies for real-time applications**
 
 **Work in progress**
 
