@@ -4,13 +4,21 @@ from transformers.cache_utils import EncoderDecoderCache, DynamicCache
 from typing import Tuple, Optional
 
 
-
 class TranslationBackend:
-    def __init__(self, source_lang, target_lang, model_name: str = "facebook/nllb-200-distilled-600M"):
-
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_lang)
+    def __init__(self, source_lang, target_lang, model_name: str = "facebook/nllb-200-distilled-600M", model=None, tokenizer=None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(self.device)
+
+        if model is not None:
+            self.model = model
+            if not hasattr(model, 'device') or str(model.device) != self.device:
+                self.model = self.model.to(self.device)
+        else:
+            self.model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(self.device)
+
+        if tokenizer is not None:
+            self.tokenizer = tokenizer
+        else:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_lang)
         
         self.source_lang = source_lang
         self.target_lang = target_lang
@@ -25,7 +33,7 @@ class TranslationBackend:
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         encoder_outputs = self.model.get_encoder()(**inputs)
         output = self.generate(
-                    encoder_hidden_states=encoder_outputs.last_hidden_state,
+                    encoder_outputs=encoder_outputs,
         )
         result = self.tokenizer.decode(output[0], skip_special_tokens=True)
         return output, result
@@ -42,7 +50,7 @@ class TranslationBackend:
                 encoder_outputs=encoder_outputs,
                 attention_mask=attention_mask,
                 forced_bos_token_id=self.bos_token_id,
-                max_length=max_length
+                max_length=max_length,
             )
         return generated_tokens
 

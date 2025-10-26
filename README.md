@@ -12,17 +12,49 @@ Converts [NoLanguageLeftBehind](https://arxiv.org/abs/2207.04672) translation mo
 
 > Based offline models such as NLLB suffer from eos token and punctuation insertion, inconsistent prefix handling and exponentially growing computational overhead as input length increases. This implementation aims at resolving that.
 
-- 200 languages
+
 - [LocalAgreement policy](https://www.isca-archive.org/interspeech_2020/liu20s_interspeech.pdf)
 - [HuggingFace transformers](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSeq2SeqLM) implementation only.
 - Built for [WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit)
+- 200 languages. See [supported_languages.md](supported_languages.md) for the full list.
+
+## Installation
+
+```bash
+pip install nllw
+```
+> The textual frontend is not installed by default.
 
 
 ## Quick Start
 
+1. Demo interface :
 ```bash
 python textual_interface.py
 ```
+
+2. Use it as a package
+```python
+import nllw
+
+model = nllw.load_model(
+    src_langs=["fra_Latn"],
+    nllb_backend="transformers",
+    nllb_size="600M"
+)
+translator = nllw.OnlineTranslation(
+    model,
+    input_languages=["fra_Latn"],
+    output_languages=["eng_Latn"]
+)
+
+translator.insert_tokens(tokens)
+validated, buffer = translator.process()
+
+print(f"Stable: {validated[0].text}")
+print(f"Buffer: {buffer.text}")
+```
+
 
 ## Input vs Output length:
 

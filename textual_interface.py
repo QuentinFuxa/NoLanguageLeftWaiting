@@ -3,72 +3,69 @@ from textual.containers import Container, Vertical, Horizontal
 from textual.widgets import Input, Static, Select
 from textual.reactive import reactive
 from textual.worker import Worker, WorkerState
-from translation_backend import TranslationBackend
-
-
-LANGUAGE_OPTIONS = [
-    ("French", "fra_Latn"),
-    ("English", "eng_Latn"),
-    ("Spanish", "spa_Latn"),
-    ("German", "deu_Latn"),
-    ("Italian", "ita_Latn"),
-    ("Portuguese", "por_Latn"),
-    ("Dutch", "nld_Latn"),
-    ("Russian", "rus_Cyrl"),
-    ("Chinese (Simplified)", "zho_Hans"),
-    ("Chinese (Traditional)", "zho_Hant"),
-    ("Japanese", "jpn_Jpan"),
-    ("Korean", "kor_Hang"),
-    ("Arabic", "arb_Arab"),
-    ("Hindi", "hin_Deva"),
-    ("Bengali", "ben_Beng"),
-    ("Vietnamese", "vie_Latn"),
-    ("Thai", "tha_Thai"),
-    ("Turkish", "tur_Latn"),
-    ("Polish", "pol_Latn"),
-    ("Czech", "ces_Latn"),
-    ("Hungarian", "hun_Latn"),
-    ("Finnish", "fin_Latn"),
-    ("Swedish", "swe_Latn"),
-    ("Norwegian Bokmål", "nob_Latn"),
-    ("Danish", "dan_Latn"),
-    ("Greek", "ell_Grek"),
-    ("Hebrew", "heb_Hebr"),
-    ("Romanian", "ron_Latn"),
-    ("Bulgarian", "bul_Cyrl"),
-    ("Croatian", "hrv_Latn"),
-    ("Serbian", "srp_Cyrl"),
-    ("Ukrainian", "ukr_Cyrl"),
-    ("Catalan", "cat_Latn"),
-]
+from nllw.core import TranslationBackend
+from nllw.languages import LANGUAGES
 
 class TranslationApp(App):
     """Interactive translation application with Textual."""
     
     CSS = """
     #main-container {
-        padding: 1;
         background: white;
     }
-    #input-label {
+
+    .lang-row {
+        height: auto;
         margin-bottom: 1;
     }
-    #output-label {
-        margin-top: 2;
-        margin-bottom: 1;
+
+    .column {
+        margin-left: 3;
+        margin-right: 3
     }
+
+    .lang-label {
+        color: $text-muted;
+        margin: 0;
+    }
+
+
+    #input-container {
+        layout: horizontal;
+        border: round $primary;
+        padding: 0 1;
+        height: 3;
+        align: left middle;
+    }
+
+    .prompt-symbol {
+        color: $primary;
+        text-style: bold;
+        width: auto;
+        height: auto;
+    }
+
+    #input-field {
+        border: none;
+        background: transparent;
+        height: 1;
+        padding: 0;
+        width: 1fr;
+    }
+
+    #input-field:focus {
+        border: none;
+    }
+
+    #output-container {
+        border: round $accent;
+        padding: 1 2;
+        min-height: 8;
+    }
+
     #output {
-        padding: 1;
+        padding: 0;
         min-height: 3;
-    }
-    #debug-label {
-        margin-top: 2;
-        margin-bottom: 1;
-    }
-    #debug-output {
-        padding: 1;
-        min-height: 3;
-        border: solid $primary;
     }
     """
     
@@ -99,32 +96,34 @@ class TranslationApp(App):
                 Vertical(
                     Static("From:", classes="lang-label"),
                     Select(
-                        ((name, nllb_name) for name, nllb_name in LANGUAGE_OPTIONS),
+                        ((language['name'], language['nllb']) for language in LANGUAGES),
                         value="fra_Latn",
-                        id="source-lang"
+                        id="source-lang", 
+                        compact=True
                     ),
                     classes="column",
                 ),
                 Vertical(
                     Static("To:", classes="lang-label"),
                     Select(
-                        ((name, nllb_name) for name, nllb_name in LANGUAGE_OPTIONS),
+                        ((language['name'], language['nllb']) for language in LANGUAGES),
                         value="eng_Latn",
-                        id="target-lang"
+                        id="target-lang",
+                        compact=True
                     ),
                     classes="column",
                 ),
             )
 
-            yield Static("Input:", id="input-label")
-            yield Input(
-                placeholder="Type your text here...",
-                id="input-field"
-            )
-            yield Static("Output:", id="output-label")
-            yield Static(id="output")
-            # yield Static("Debug Output:", id="debug-label")
-            # yield Static(id="debug-output")
+            with Container(id="input-container"):
+                yield Static("> ", classes="prompt-symbol")
+                yield Input(
+                    placeholder="Type your text here...",
+                    id="input-field"
+                )
+
+            with Container(id="output-container"):
+                yield Static(id="output")
     
     def on_mount(self) -> None:
         self._load_backend()
@@ -226,7 +225,7 @@ class TranslationApp(App):
             
             output = stable_translation
             if buffer:
-                output += f"[yellow]{buffer}[/]"
+                output += f"[$accent]{buffer}[/]"
             
             self.query_one("#output", Static).update(output)
             

@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nllw"
+version = "0.1.0"
+description = "Simultaneous Machine Translation (SimulMT) with NLLB model optimization"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Quentin Fuxa"}
+]
+keywords = [
+    "machine-translation",
+    "simultaneous-translation",
+    "nllb",
+    "streaming",
+    "nlp",
+    "transformers",
+    "ai"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Multimedia :: Sound/Audio :: Speech"
+]
+
+dependencies = [
+    "torch>=1.10.0",
+    "transformers>=4.30.0",
+]
+
+[project.optional-dependencies]
+ctranslate2 = [
+    "ctranslate2>=3.16.0",
+]
+demo = [
+    "textual>=0.40.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/QuentinFuxa/NoLanguageLeftWaiting"
+
+[tool.setuptools]
+packages = ["nllw"]
+
+[tool.setuptools.package-data]
+nllw = ["py.typed"]
