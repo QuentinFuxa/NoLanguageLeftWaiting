@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from transformers.cache_utils import EncoderDecoderCache
+from transformers.cache_utils import EncoderDecoderCache, DynamicCache
 from typing import Tuple, Optional
 
 
@@ -94,30 +94,35 @@ class TranslationBackend:
     def _continue_generation_with_cache(
         self,
         encoder_hidden_states: torch.Tensor,
-        max_new_tokens: int = 50
+        max_new_tokens: int = 200
     ) -> torch.Tensor:
         eos_token_id = self.tokenizer.eos_token_id
-                
+
         with torch.no_grad():
+            past_key_values = EncoderDecoderCache(
+                self_attention_cache=DynamicCache(),
+                cross_attention_cache=DynamicCache()
+            )
+
             decoder_out = self.model.model.decoder(
                 input_ids=self.stable_prefix,
                 encoder_hidden_states=encoder_hidden_states,
+                past_key_values=past_key_values,
                 use_cache=True,
                 return_dict=True,
             )
+            past_key_values = decoder_out.past_key_values
             prefix_logits = self.model.lm_head(decoder_out.last_hidden_state)
-            past_key_values = EncoderDecoderCache.from_legacy_cache(decoder_out.past_key_values)
-            
             next_token_id = torch.argmax(prefix_logits[:, -1, :], dim=-1).unsqueeze(-1)
-            
-            if next_token_id.item() == eos_token_id:
-                return self.stable_prefix
-            
-            generated_tokens = torch.cat([self.stable_prefix, next_token_id], dim=-1)
-            
-            tokens_to_generate = max_new_tokens - generated_tokens.shape[1]
-            
-            for _ in range(max(0, tokens_to_generate)):
+
+            generated_tokens = self.stable_prefix.clone()
+
+            for _ in range(max_new_tokens):
+                if next_token_id.item() == eos_token_id:
+                    break
+
+                generated_tokens = torch.cat([generated_tokens, next_token_id], dim=-1)
+
                 decoder_out = self.model.model.decoder(
                     input_ids=next_token_id,
                     encoder_hidden_states=encoder_hidden_states,
@@ -125,16 +130,10 @@ class TranslationBackend:
                     use_cache=True,
                     return_dict=True,
                 )
+                past_key_values = decoder_out.past_key_values
                 logits = self.model.lm_head(decoder_out.last_hidden_state)
-                
                 next_token_id = torch.argmax(logits[:, -1, :], dim=-1).unsqueeze(-1)
-                past_key_values = EncoderDecoderCache.from_legacy_cache(decoder_out.past_key_values)
-                
-                if next_token_id.item() == eos_token_id:
-                    break
-                
-                generated_tokens = torch.cat([generated_tokens, next_token_id], dim=-1)
-        
+
         return generated_tokens
 
 

@@ -1,10 +1,46 @@
 from textual.app import App, ComposeResult
-from textual.containers import Container, Vertical
-from textual.widgets import Input, Static, Header, Footer
+from textual.containers import Container, Vertical, Horizontal
+from textual.widgets import Input, Static, Select
 from textual.reactive import reactive
 from textual.worker import Worker, WorkerState
 from translation_backend import TranslationBackend
 
+
+LANGUAGE_OPTIONS = [
+    ("French", "fra_Latn"),
+    ("English", "eng_Latn"),
+    ("Spanish", "spa_Latn"),
+    ("German", "deu_Latn"),
+    ("Italian", "ita_Latn"),
+    ("Portuguese", "por_Latn"),
+    ("Dutch", "nld_Latn"),
+    ("Russian", "rus_Cyrl"),
+    ("Chinese (Simplified)", "zho_Hans"),
+    ("Chinese (Traditional)", "zho_Hant"),
+    ("Japanese", "jpn_Jpan"),
+    ("Korean", "kor_Hang"),
+    ("Arabic", "arb_Arab"),
+    ("Hindi", "hin_Deva"),
+    ("Bengali", "ben_Beng"),
+    ("Vietnamese", "vie_Latn"),
+    ("Thai", "tha_Thai"),
+    ("Turkish", "tur_Latn"),
+    ("Polish", "pol_Latn"),
+    ("Czech", "ces_Latn"),
+    ("Hungarian", "hun_Latn"),
+    ("Finnish", "fin_Latn"),
+    ("Swedish", "swe_Latn"),
+    ("Norwegian Bokmål", "nob_Latn"),
+    ("Danish", "dan_Latn"),
+    ("Greek", "ell_Grek"),
+    ("Hebrew", "heb_Hebr"),
+    ("Romanian", "ron_Latn"),
+    ("Bulgarian", "bul_Cyrl"),
+    ("Croatian", "hrv_Latn"),
+    ("Serbian", "srp_Cyrl"),
+    ("Ukrainian", "ukr_Cyrl"),
+    ("Catalan", "cat_Latn"),
+]
 
 class TranslationApp(App):
     """Interactive translation application with Textual."""
@@ -53,9 +89,33 @@ class TranslationApp(App):
         self.current_worker = None
         self.debug_log = []
         self.current_input_text = ""
+
+        self.source_lang = "fra_Latn"
+        self.target_lang = "eng_Latn"
             
     def compose(self) -> ComposeResult:
         with Container(id="main-container"):
+            yield Horizontal(
+                Vertical(
+                    Static("From:", classes="lang-label"),
+                    Select(
+                        ((name, nllb_name) for name, nllb_name in LANGUAGE_OPTIONS),
+                        value="fra_Latn",
+                        id="source-lang"
+                    ),
+                    classes="column",
+                ),
+                Vertical(
+                    Static("To:", classes="lang-label"),
+                    Select(
+                        ((name, nllb_name) for name, nllb_name in LANGUAGE_OPTIONS),
+                        value="eng_Latn",
+                        id="target-lang"
+                    ),
+                    classes="column",
+                ),
+            )
+
             yield Static("Input:", id="input-label")
             yield Input(
                 placeholder="Type your text here...",
@@ -63,8 +123,8 @@ class TranslationApp(App):
             )
             yield Static("Output:", id="output-label")
             yield Static(id="output")
-            yield Static("Debug Output:", id="debug-label")
-            yield Static(id="debug-output")
+            # yield Static("Debug Output:", id="debug-label")
+            # yield Static(id="debug-output")
     
     def on_mount(self) -> None:
         self._load_backend()
@@ -80,11 +140,11 @@ class TranslationApp(App):
                     "[yellow]Loading translation model...[/]"
                 )
                 self.backend = TranslationBackend(
-                    source_lang='fra_Latn',
-                    target_lang='eng_Latn'
+                    source_lang=self.source_lang,
+                    target_lang=self.target_lang
                 )
                 self.query_one("#output", Static).update(
-                    "[green]Type French text and press space to translate.[/]"
+                    f"[green]Type {self.source_lang} text and press space to translate to {self.target_lang}.[/]"
                 )
             except Exception as e:
                 self.query_one("#output", Static).update(
@@ -144,6 +204,18 @@ class TranslationApp(App):
         stable_translation, buffer = self.backend.translate(text)
         return stable_translation, buffer, text
     
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Handle language selection changes."""
+        if event.select.id == "source-lang":
+            self.source_lang = str(event.value)
+        elif event.select.id == "target-lang":
+            self.target_lang = str(event.value)        
+        if hasattr(self, 'backend') and self.backend is not None:
+            self.backend = None
+            # self.debug_log.clear()
+            # self.query_one("#debug-output", Static).update("")
+            self._load_backend()
+    
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         """Handle worker state changes and update UI with results."""
         if event.state == WorkerState.SUCCESS:
@@ -154,15 +226,14 @@ class TranslationApp(App):
             
             output = stable_translation
             if buffer:
-                output += f"[grey]{buffer}[/]"
+                output += f"[yellow]{buffer}[/]"
             
             self.query_one("#output", Static).update(output)
             
-            # Update debug output
-            debug_entry = f"{original_text}: {stable_translation} | {buffer}"
-            self.debug_log.append(debug_entry)
-            debug_text = "\n".join(self.debug_log)
-            self.query_one("#debug-output", Static).update(debug_text)
+            # debug_entry = f"{original_text}: {stable_translation} | {buffer}"
+            # self.debug_log.append(debug_entry)
+            # debug_text = "\n".join(self.debug_log)
+            # self.query_one("#debug-output", Static).update(debug_text)
         elif event.state == WorkerState.ERROR:
             self.log(f"Translation error: {event.worker.error}")
             self.query_one("#output", Static).update("[red]Translation error[/]")
