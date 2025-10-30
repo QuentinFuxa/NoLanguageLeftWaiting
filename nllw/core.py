@@ -23,9 +23,19 @@ class TranslationBackend:
         self.source_lang = source_lang
         self.target_lang = target_lang
         self.bos_token_id = self.tokenizer.convert_tokens_to_ids(self.target_lang)
-        
-        self.period_token_id = self.tokenizer.convert_tokens_to_ids('.') #dont work, returns language id: 248075
-        # self.period_token_id = self.tokenizer.encode('.')[1] #[256057, 81, 2]
+
+        self.sentence_end_token_ids = set()
+
+        # find all tokens that decode to sentence-ending punctuation. For ex: token 81 and 248075 both represent '.')
+        for token_id in range(min(300000, self.tokenizer.vocab_size)):
+            try:
+                decoded = self.tokenizer.decode([token_id])
+                cleaned = decoded.strip().strip("'\"").strip()
+                if cleaned in ['.', '!', '?']:
+                    self.sentence_end_token_ids.add(token_id)
+            except:
+                pass
+
         self.previous_tokens = None
         self.stable_prefix = None
     
@@ -57,10 +67,23 @@ class TranslationBackend:
     def compute_common_prefix_tokens(
         self, new_tokens
     ):
+        common_length = 0
         for i in range(min(len(self.previous_tokens[0]), len(new_tokens[0]))):
             if self.previous_tokens[0][i] != new_tokens[0][i]:
-                return new_tokens[:, :i]
-        return self.previous_tokens
+                common_length = i
+                break
+        else:
+            common_length = min(len(self.previous_tokens[0]), len(new_tokens[0]))
+
+        last_sentence_end = -1
+        for i in range(common_length):
+            if new_tokens[0][i].item() in self.sentence_end_token_ids:
+                last_sentence_end = i
+
+        if last_sentence_end >= 0:
+            return new_tokens[:, :last_sentence_end]
+
+        return new_tokens[:, :common_length]
     
     def translate(self, text: str) -> str:
         word_count = len(text.strip().split())

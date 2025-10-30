@@ -32,6 +32,7 @@ coverage.xml
 *.cover
 .hypothesis/
 .pytest_cache/
+other/*
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -68,3 +69,4 @@ nllb-200-distilled-*-ctranslate2/
 *.csv
 *.png
 *.gif
+
