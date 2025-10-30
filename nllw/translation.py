@@ -69,7 +69,6 @@ class TranslationModel():
     nllb_size: str = '600M'
     model_name: str = field(default='')
 
-
     def get_tokenizer(self, input_lang):
         if not self.tokenizer.get(input_lang, False):
             model_name = self.model_name or f"facebook/nllb-200-distilled-{self.nllb_size}"
@@ -151,6 +150,7 @@ class OnlineTranslation:
         self.input_buffer = []
         self.last_buffer = ''
         self.commited = []
+        self.len_computed: int = 0
 
         self.backend = TranslationBackend(
             source_lang=self.input_languages[0],
@@ -172,9 +172,10 @@ class OnlineTranslation:
         else:
             start_time = end_time = 0
         stable_translation, buffer_text = self.backend.translate(text)
-
+        new_stable = stable_translation[self.len_computed:]
+        self.len_computed += len(stable_translation)
         validated = TimedText(
-            text=stable_translation,
+            text=new_stable,
             start=start_time,
             end=end_time
         )
