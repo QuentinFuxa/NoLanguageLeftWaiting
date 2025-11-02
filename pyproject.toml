@@ -47,6 +47,8 @@ ctranslate2 = [
 ]
 demo = [
     "textual>=0.40.0",
+    "bertviz>=1.4.1",
+    "transformers>4.57"
 ]
 
 [project.urls]

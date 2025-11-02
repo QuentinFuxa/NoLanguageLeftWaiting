@@ -5,7 +5,7 @@ import transformers
 from dataclasses import dataclass, field
 from typing import Optional, Union
 import huggingface_hub
-
+from nllw.timed_text import TimedText
 try:
     import ctranslate2
     CTRANSLATE2_AVAILABLE = True
@@ -19,46 +19,6 @@ from .core import TranslationBackend
 logger = logging.getLogger(__name__)
 
 MIN_SILENCE_DURATION_DEL_BUFFER = 1.0
-
-@dataclass
-class TimedText:
-    start: Optional[float] = 0
-    end: Optional[float] = 0
-    text: Optional[str] = ''
-
-    def overlaps_with(self, other: 'TimedText') -> bool:
-        return not (self.end <= other.start or other.end <= self.start)
-
-    def is_within(self, other: 'TimedText') -> bool:
-        return other.contains_timespan(self)
-
-    def approximate_cut_at(self, cut_time):
-        """
-        Each word in text is considered to be of duration (end-start)/len(words in text)
-        """
-        if not self.text or not self.contains_time(cut_time):
-            return self, None
-
-        words = self.text.split()
-        num_words = len(words)
-        if num_words == 0:
-            return self, None
-
-        duration_per_word = self.duration() / num_words
-        
-        cut_word_index = int((cut_time - self.start) / duration_per_word)
-        
-        if cut_word_index >= num_words:
-            cut_word_index = num_words -1
-        
-        text0 = " ".join(words[:cut_word_index])
-        text1 = " ".join(words[cut_word_index:])
-
-        segment0 = Translation(start=self.start, end=cut_time, text=text0)
-        segment1 = Translation(start=cut_time, end=self.end, text=text1)
-
-        return segment0, segment1
-
 
 @dataclass
 class TranslationModel():
@@ -147,7 +107,6 @@ class OnlineTranslation:
                 raise ValueError(f"Unknown output language identifier: {lang}")
             self.output_languages.append(nllb_code)
 
-        self.input_buffer = []
         self.last_buffer = ''
         self.commited = []
         self.len_computed: int = 0
@@ -161,14 +120,14 @@ class OnlineTranslation:
         )
 
     def insert_tokens(self, tokens):
-        self.input_buffer.extend(tokens)
+        self.backend.input_buffer.extend(tokens)
     
     def process(self):
-        text = ''.join([token.text for token in self.input_buffer])
-        
-        if self.input_buffer:
-            start_time = self.input_buffer[0].start
-            end_time = self.input_buffer[-1].end
+        text = ''.join([token.text for token in self.backend.input_buffer])
+
+        if self.backend.input_buffer:
+            start_time = self.backend.input_buffer[0].start
+            end_time = self.backend.input_buffer[-1].end
         else:
             start_time = end_time = 0
         stable_translation, buffer_text = self.backend.translate(text)
@@ -195,5 +154,5 @@ class OnlineTranslation:
                 if isinstance(self.last_buffer, str):
                     self.last_buffer = TimedText(text=self.last_buffer)
                 self.commited.append(self.last_buffer)
-            self.input_buffer = [] #maybe need to reprocess stuff before inserting silence
+            self.backend.input_buffer = [] #maybe need to reprocess stuff before inserting silence
             self.last_buffer = ''
