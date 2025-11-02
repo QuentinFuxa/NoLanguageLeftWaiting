@@ -17,6 +17,7 @@ Converts [NoLanguageLeftBehind](https://arxiv.org/abs/2207.04672) translation mo
 - [HuggingFace transformers](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSeq2SeqLM) implementation only.
 - Built for [WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit)
 - 200 languages. See [supported_languages.md](supported_languages.md) for the full list.
+- Working on implementing a speculative/self-speculative decoding for a faster decoder, using 600M as draft model, and 1.3B as main model. Refs: https://arxiv.org/pdf/2211.17192:  https://arxiv.org/html/2509.21740v1, 
 
 ## Installation
 
