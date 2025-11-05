@@ -6,6 +6,15 @@ class TimedText:
     text: Optional[str] = None
     start: Optional[float] = 0
     end: Optional[float] = 0
+    
+    def duration(self) -> float:
+        return self.end - self.start
+
+    def contains_time(self, time: float) -> bool:
+        return self.start <= time <= self.end
+
+    def contains_timespan(self, other: 'TimedText') -> bool:
+        return self.start <= other.start and self.end >= other.end
 
     def overlaps_with(self, other: 'TimedText') -> bool:
         return not (self.end <= other.start or other.end <= self.start)
