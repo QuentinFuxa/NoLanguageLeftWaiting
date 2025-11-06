@@ -72,7 +72,7 @@ The flow tested in `speculative_decoding_v0.py`:
 This “partial verification” trims the work the main decoder performs after each divergence, while keeping the responsiveness of the draft hypothesis. Early timing experiments from `speculative_decoding_v0.py` show the verification pass (~0.15 s in the example) is significantly cheaper than recomputing a full decoding step every time.
 
 <p align="center">
-<img src="partial speculative decoding.png"width="730">
+<img src="partial_speculative_decoding.png"width="730">
 </p>
 
 
