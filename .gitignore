@@ -67,6 +67,5 @@ docs_hf/*
 nllb-200-distilled-*-ctranslate2/
 *.pkl
 *.csv
-*.png
 *.gif
 
