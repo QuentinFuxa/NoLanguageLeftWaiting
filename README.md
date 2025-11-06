@@ -41,7 +41,7 @@ import nllw
 model = nllw.load_model(
     src_langs=["fra_Latn"],
     nllb_backend="transformers",
-    nllb_size="600M"
+    nllb_size="600M" #Alternative: 1.3B
 )
 translator = nllw.OnlineTranslation(
     model,
@@ -49,12 +49,32 @@ translator = nllw.OnlineTranslation(
     output_languages=["eng_Latn"]
 )
 
+tokens = [nllw.timed_text.TimedText('Ceci est un test de traduction')]
 translator.insert_tokens(tokens)
 validated, buffer = translator.process()
+print(f"{validated} | {buffer}")
 
-print(f"Stable: {validated[0].text}")
-print(f"Buffer: {buffer.text}")
+tokens = [nllw.timed_text.TimedText('en temps réel')]
+translator.insert_tokens(tokens)
+validated, buffer = translator.process()
+print(f"{validated} | {buffer}")
 ```
+
+## Work In Progress : Partial Speculative Decoding
+
+Local Agreement already locks a stable prefix for the committed translation, so we cannot directly adopt [Self-Speculative Biased Decoding for Faster Live Translation](https://arxiv.org/html/2509.21740v1). Our ongoing prototype instead borrows the speculative idea only for the *new* tokens that need to be validated by the larger model.
+
+The flow tested in `speculative_decoding_v0.py`:
+- Run the 600M draft decoder once to obtain the candidate continuation and its cache.
+- Replay the draft tokens through the 1.3B model, but stop the forward pass as soon as the main model reproduces a token emitted by the draft (`predicted_tokens` matches the draft output). We keep those verified tokens and only continue generation from that point.
+- On mismatch, resume full decoding with the 1.3B model until a match is reached again, instead of discarding the entire draft segment.
+
+This “partial verification” trims the work the main decoder performs after each divergence, while keeping the responsiveness of the draft hypothesis. Early timing experiments from `speculative_decoding_v0.py` show the verification pass (~0.15 s in the example) is significantly cheaper than recomputing a full decoding step every time.
+
+<p align="center">
+<img src="partial speculative decoding.png"width="730">
+</p>
+
 
 
 ## Input vs Output length:

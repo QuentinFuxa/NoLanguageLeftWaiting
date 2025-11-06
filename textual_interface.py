@@ -10,9 +10,6 @@ class TranslationApp(App):
     """Interactive translation application with Textual."""
     
     CSS = """
-    #main-container {
-        background: white;
-    }
 
     .lang-row {
         height: auto;
@@ -82,14 +79,15 @@ class TranslationApp(App):
         self.backend = None
         self.backend_loading = False
         self.last_words_count = 0
-        self.theme = "catppuccin-latte"
         self.current_worker = None
         self.debug_log = []
         self.current_input_text = ""
 
         self.source_lang = "fra_Latn"
         self.target_lang = "eng_Latn"
-            
+        self.len_input_sent = 0
+        self.validated_translation = str()
+
     def compose(self) -> ComposeResult:
         with Container(id="main-container"):
             yield Horizontal(
@@ -124,6 +122,9 @@ class TranslationApp(App):
 
             with Container(id="output-container"):
                 yield Static(id="output")
+
+            with Container(id="debug-container"):
+                yield Static(id="debug-output")
     
     def on_mount(self) -> None:
         self._load_backend()
@@ -164,7 +165,9 @@ class TranslationApp(App):
             if status_text:
                 self.query_one("#output", Static).update(status_text)
         else:
-            self.current_input_text = input_text
+            new_total_len = len(input_text)
+            input_text = input_text[self.len_input_sent:]
+            self.len_input_sent = new_total_len
             self.current_worker = self.run_worker(
                 lambda: self._translate_async(input_text),
                 thread=True,
@@ -172,18 +175,8 @@ class TranslationApp(App):
             )
     
     def _should_translate(self, text: str) -> bool:
-        if not text or self.backend_loading or self.backend is None:
-            return False
-        
-        word_count = len(text.strip().split())
-        if word_count < 3:
-            return False
-        
-        if text.endswith(' '):
-            if word_count >= self.last_words_count + 1:
-                self.last_words_count = word_count
+        if text and text.endswith(' '):
                 return True
-        
         return False
     
     def _get_status_text(self, text: str) -> str:
@@ -211,28 +204,28 @@ class TranslationApp(App):
             self.target_lang = str(event.value)        
         if hasattr(self, 'backend') and self.backend is not None:
             self.backend = None
-            # self.debug_log.clear()
-            # self.query_one("#debug-output", Static).update("")
+            self.debug_log.clear()
+            self.query_one("#debug-output", Static).update("")
             self._load_backend()
     
     def on_worker_state_changed(self, event: Worker.StateChanged) -> None:
         """Handle worker state changes and update UI with results."""
         if event.state == WorkerState.SUCCESS:
-            stable_translation, buffer, original_text = event.worker.result            
+            new_stable_translation, buffer, original_text = event.worker.result            
+            self.validated_translation += (' ' + new_stable_translation.strip(' ')) if new_stable_translation.strip(' ') else "" #new for space since we send input with space but models return without except when puncuation
+            # if not new_stable_translation and not buffer:
+            #     return
             
-            if not stable_translation and not buffer:
-                return
-            
-            output = stable_translation
+            output = self.validated_translation
             if buffer:
-                output += f"[$accent]{buffer}[/]"
+                output += f"[$accent] {buffer.strip(' ')}[/]"
             
             self.query_one("#output", Static).update(output)
             
-            # debug_entry = f"{original_text}: {stable_translation} | {buffer}"
-            # self.debug_log.append(debug_entry)
-            # debug_text = "\n".join(self.debug_log)
-            # self.query_one("#debug-output", Static).update(debug_text)
+            debug_entry = f"""{original_text}| [$primary]"{new_stable_translation}"[/] [$accent]"{buffer}"[/] """
+            self.debug_log.append(debug_entry)
+            debug_text = "\n".join(self.debug_log)
+            self.query_one("#debug-output", Static).update(debug_text)
         elif event.state == WorkerState.ERROR:
             self.log(f"Translation error: {event.worker.error}")
             self.query_one("#output", Static).update("[red]Translation error[/]")

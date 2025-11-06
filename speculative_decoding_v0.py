@@ -74,8 +74,8 @@ def sequential_decoding(model, encoder_last_hidden_state):
 
 l_results = []
 
-for i in range(1, len(src_2_fr)):
-    text = ''.join(src_2_fr[:i])
+for i in range(3, len(src_2_fr)):
+    text = ' '.join(src_2_fr[:i])
 
     inputs = tokenizer(text, return_tensors="pt").to(device)
 
@@ -115,13 +115,13 @@ for i in range(1, len(src_2_fr)):
     predicted_tokens[0, 1:]
     generated_tokens_draft[0, 2:]
 
-    for i in range(len(generated_tokens_main[0, 2:])):
-        if predicted_tokens[0, 1:][i] != generated_tokens_main[0, 2:][i]:
-            print('A', i)
-        if generated_tokens_draft[0, 2:][i] != generated_tokens_main[0, 2:][i]:
-            print('B', i)
-        if predicted_tokens[0, 1:][i] != generated_tokens_draft[0, 2:][i]:
-            print('C', i)
+    # for i in range(len(generated_tokens_main[0, 2:])):
+    #     if predicted_tokens[0, 1:][i] != generated_tokens_main[0, 2:][i]:
+    #         print('A', i)
+    #     if generated_tokens_draft[0, 2:][i] != generated_tokens_main[0, 2:][i]:
+    #         print('B', i)
+    #     if predicted_tokens[0, 1:][i] != generated_tokens_draft[0, 2:][i]:
+    #         print('C', i)
 
 
     matches = (predicted_tokens == expected_tokens)
@@ -131,7 +131,7 @@ for i in range(1, len(src_2_fr)):
     print(f"Verification pass: {verification_time:.4f}s for {total_verified} positions")
     print(f"Tokens matching main model: {verified_tokens}/{total_verified}")
 
-    result = tokenizer.decode(predicted_tokens[0], skip_special_tokens=True)
+    result = tokenizer.decode(generated_tokens_draft[0], skip_special_tokens=True)
     print("\n=== Translation Result ===")
     print(result)
 

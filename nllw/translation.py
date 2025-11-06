@@ -6,19 +6,24 @@ from dataclasses import dataclass, field
 from typing import Optional, Union
 import huggingface_hub
 from nllw.timed_text import TimedText
-try:
-    import ctranslate2
-    CTRANSLATE2_AVAILABLE = True
-except ImportError:
-    CTRANSLATE2_AVAILABLE = False
-    ctranslate2 = None
+# try:
+#     import ctranslate2
+#     CTRANSLATE2_AVAILABLE = True
+# except ImportError:
+#     CTRANSLATE2_AVAILABLE = False
+#     ctranslate2 = None
 
-from .languages import get_nllb_code, convert_to_nllb_code
+from .languages import convert_to_nllb_code
 from .core import TranslationBackend
 
-logger = logging.getLogger(__name__)
+"""
+Interface for WhisperLiveKit. For other usages, it may be wiser to look at nllw.core directly.
+"""
 
+
+logger = logging.getLogger(__name__)
 MIN_SILENCE_DURATION_DEL_BUFFER = 1.0
+
 
 @dataclass
 class TranslationModel():
@@ -109,7 +114,7 @@ class OnlineTranslation:
 
         self.last_buffer = ''
         self.commited = []
-        self.len_computed: int = 0
+        self.last_end_time: float = 0.0 
 
         self.backend = TranslationBackend(
             source_lang=self.input_languages[0],
@@ -123,18 +128,16 @@ class OnlineTranslation:
         self.backend.input_buffer.extend(tokens)
     
     def process(self):
-        text = ''.join([token.text for token in self.backend.input_buffer])
-
         if self.backend.input_buffer:
-            start_time = self.backend.input_buffer[0].start
+            start_time = self.last_end_time
             end_time = self.backend.input_buffer[-1].end
+            self.last_end_time = end_time
         else:
-            start_time = end_time = 0
-        stable_translation, buffer_text = self.backend.translate(text)
-        new_stable = stable_translation[self.len_computed:]
-        self.len_computed += len(stable_translation)
+            start_time = end_time = 0.0
+        self.last_end_time
+        stable_translation, buffer_text = self.backend.translate()
         validated = TimedText(
-            text=new_stable,
+            text=stable_translation,
             start=start_time,
             end=end_time
         )

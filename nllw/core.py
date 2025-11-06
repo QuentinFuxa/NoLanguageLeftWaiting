@@ -130,7 +130,7 @@ class TranslationBackend:
                 self.n_remaining_input_punctuation -= 1
             else:
                 print("\033[31mPrefix cut\033[0m")
-                return self.new_produced_tokens[:last_sentence_end]
+                return self.new_produced_tokens[:last_sentence_end], self.new_produced_tokens[last_sentence_end:]
         return self.new_produced_tokens[:common_length], self.new_produced_tokens[common_length:]
 
     
