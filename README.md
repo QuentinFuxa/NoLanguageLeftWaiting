@@ -14,7 +14,7 @@ Converts [NoLanguageLeftBehind](https://arxiv.org/abs/2207.04672) translation mo
 
 
 - [LocalAgreement policy](https://www.isca-archive.org/interspeech_2020/liu20s_interspeech.pdf)
-- [HuggingFace transformers](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSeq2SeqLM) implementation only.
+- Backends: [HuggingFace transformers](https://huggingface.co/docs/transformers/model_doc/auto#transformers.AutoModelForSeq2SeqLM) / [Ctranslate2 Translator](https://opennmt.net/CTranslate2/python/ctranslate2.Translator.html#ctranslate2.Translator.translate_batch) (beta)
 - Built for [WhisperLiveKit](https://github.com/QuentinFuxa/WhisperLiveKit)
 - 200 languages. See [supported_languages.md](supported_languages.md) for the full list.
 - Working on implementing a speculative/self-speculative decoding for a faster decoder, using 600M as draft model, and 1.3B as main model. Refs: https://arxiv.org/pdf/2211.17192:  https://arxiv.org/html/2509.21740v1, 
