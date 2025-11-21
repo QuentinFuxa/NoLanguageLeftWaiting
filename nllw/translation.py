@@ -32,8 +32,7 @@ class OnlineTranslation:
                 raise ValueError(f"Unknown output language identifier: {lang}")
             self.output_languages.append(nllb_code)
 
-        self.last_buffer = ''
-        self.commited = []
+        self.last_buffer = TimedText()
         self.last_end_time: float = 0.0 
 
         self.backend = TranslationBackend(
@@ -57,7 +56,7 @@ class OnlineTranslation:
             start_time = end_time = 0.0
         self.last_end_time
         stable_translation, buffer_text = self.backend.translate()
-        validated = TimedText(
+        new_validated_translation = TimedText(
             text=stable_translation,
             start=start_time,
             end=end_time
@@ -69,14 +68,10 @@ class OnlineTranslation:
             end=end_time
         )
         self.last_buffer = buffer
-        self.commited.append(validated)
-        return self.commited, buffer
+        return new_validated_translation, buffer
 
-    def insert_silence(self, silence_duration: float):
-        if silence_duration >= MIN_SILENCE_DURATION_DEL_BUFFER:
-            if self.last_buffer:
-                if isinstance(self.last_buffer, str):
-                    self.last_buffer = TimedText(text=self.last_buffer)
-                self.commited.append(self.last_buffer)
-            self.backend.input_buffer = [] #maybe need to reprocess stuff before inserting silence
-            self.last_buffer = ''
+    def validate_buffer_and_reset(self, duration: float = None):
+        pass
+
+    def insert_silence(self, duration: float = None):
+        pass
