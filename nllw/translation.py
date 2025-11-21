@@ -1,4 +1,5 @@
 import logging
+import torch
 from nllw.timed_text import TimedText
 
 from .languages import convert_to_nllb_code
@@ -71,7 +72,13 @@ class OnlineTranslation:
         return new_validated_translation, buffer
 
     def validate_buffer_and_reset(self, duration: float = None):
-        pass
+        self.backend.input_buffer = []
+        self.backend.target_prefix_tokens = [self.backend.target_lang_token]
+        self.backend.previous_tokens = []
+        self.backend.stable_prefix_segments = []
+        self.backend.stable_prefix_tokens = torch.tensor([], dtype=torch.int64)
+        self.backend.n_remaining_input_punctuation = 0
+        return self.last_buffer, TimedText()
 
     def insert_silence(self, duration: float = None):
         pass
