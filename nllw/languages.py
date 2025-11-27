@@ -214,7 +214,13 @@ NLLB_TO_NAME = {lang["nllb"]: lang["name"] for lang in LANGUAGES}
 
 
 def get_nllb_code(language_code_code):
-    return LANGUAGE_CODE_TO_NLLB.get(language_code_code, None)
+    result = LANGUAGE_CODE_TO_NLLB.get(language_code_code, None)
+    if result is not None:
+        return result
+    for lang_code, nllb_code in LANGUAGE_CODE_TO_NLLB.items():
+        if lang_code.lower() == language_code_code.lower():
+            return nllb_code
+    return None
 
 
 def get_language_code_code(nllb_code):
@@ -222,7 +228,13 @@ def get_language_code_code(nllb_code):
 
 
 def get_language_name_by_language_code(language_code_code):
-    return LANGUAGE_CODE_TO_NAME.get(language_code_code)
+    result = LANGUAGE_CODE_TO_NAME.get(language_code_code)
+    if result is not None:
+        return result
+    for lang_code, name in LANGUAGE_CODE_TO_NAME.items():
+        if lang_code.lower() == language_code_code.lower():
+            return name
+    return None
 
 
 def get_language_name_by_nllb(nllb_code):
@@ -234,7 +246,9 @@ def get_language_info(identifier, identifier_type="auto"):
         for lang in LANGUAGES:
             if (lang["name"].lower() == identifier.lower() or 
                 lang["nllb"] == identifier or 
-                lang["language_code"] == identifier):
+                lang["nllb"].lower() == identifier.lower() or
+                lang["language_code"] == identifier or
+                lang["language_code"].lower() == identifier.lower()):
                 return lang
     elif identifier_type == "name":
         for lang in LANGUAGES:
@@ -242,11 +256,11 @@ def get_language_info(identifier, identifier_type="auto"):
                 return lang
     elif identifier_type == "nllb":
         for lang in LANGUAGES:
-            if lang["nllb"] == identifier:
+            if lang["nllb"] == identifier or lang["nllb"].lower() == identifier.lower():
                 return lang
     elif identifier_type == "language_code":
         for lang in LANGUAGES:
-            if lang["language_code"] == identifier:
+            if lang["language_code"] == identifier or lang["language_code"].lower() == identifier.lower():
                 return lang
     
     return None
