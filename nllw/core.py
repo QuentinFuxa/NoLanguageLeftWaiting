@@ -1,11 +1,10 @@
 import torch
 import time
-import transformers
 import huggingface_hub
 from dataclasses import dataclass, field
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from transformers.cache_utils import EncoderDecoderCache, DynamicCache
-from typing import Tuple, Optional, List, Dict, Union
+from typing import Tuple, Optional, Dict, Union
 from nllw.timed_text import TimedText
 from nllw.languages import convert_to_nllb_code
 
@@ -173,7 +172,7 @@ class TranslationBackend:
         self.input_buffer = []
         self.previous_tokens = []
         self.stable_prefix_segments = []
-        self.stable_prefix_tokens = torch.tensor([], dtype=torch.int64)
+        self.stable_prefix_tokens = torch.tensor([], dtype=torch.int64, device=self.device)
         self.n_remaining_input_punctuation = 0
 
     def _trim(self) -> bool:
@@ -270,7 +269,6 @@ class TranslationBackend:
                     split_index = idx
                     if char_count - len(timed_text.text) <= last_punct_pos:
                         chars_before = last_punct_pos + 1 - (char_count - len(timed_text.text))
-                        before_text = timed_text.text[:chars_before]
                         after_text = timed_text.text[chars_before:]
                         if after_text:
                             self.input_buffer = [TimedText(text=after_text, start=timed_text.start, end=timed_text.end)] + self.input_buffer[idx + 1:]
@@ -285,6 +283,8 @@ class TranslationBackend:
         return buffer_text, early_cut
 
     def _hf_transformers_translate(self, tokenized_inputs):
+        device = next(self.model.parameters()).device
+        tokenized_inputs = {k: v.to(device) for k, v in tokenized_inputs.items()}
         start_time = time.time()
         with torch.no_grad():
             encoder_outputs = self.model.get_encoder()(**tokenized_inputs)
@@ -343,7 +343,7 @@ class TranslationBackend:
             print('\033[33mResetting stable prefix state after early cut\033[0m')
             new_stable_tokens = self.new_produced_tokens
             self.stable_prefix_segments = []
-            self.stable_prefix_tokens = torch.tensor([], dtype=torch.int64)
+            self.stable_prefix_tokens = torch.tensor([], dtype=torch.int64, device=self.device)
             self.previous_tokens = []
             self.n_remaining_input_punctuation = 0
             buffer = ''
@@ -369,6 +369,9 @@ class TranslationBackend:
         max_new_tokens: int = 200
     ) -> torch.Tensor:
         eos_token_id = self.tokenizer.eos_token_id
+        
+        device = encoder_hidden_states.device
+        stable_prefix_tokens = self.stable_prefix_tokens.to(device)
 
         with torch.no_grad():
             past_key_values = EncoderDecoderCache(
@@ -377,7 +380,7 @@ class TranslationBackend:
             )
 
             decoder_out = self.model.model.decoder(
-                input_ids=self.stable_prefix_tokens.unsqueeze(0),
+                input_ids=stable_prefix_tokens.unsqueeze(0),
                 encoder_hidden_states=encoder_hidden_states,
                 past_key_values=past_key_values,
                 use_cache=True,
@@ -387,7 +390,7 @@ class TranslationBackend:
             prefix_logits = self.model.lm_head(decoder_out.last_hidden_state)
             next_token_id = torch.argmax(prefix_logits[:, -1, :], dim=-1).unsqueeze(-1)
 
-            generated_tokens = self.stable_prefix_tokens.unsqueeze(0).clone()
+            generated_tokens = stable_prefix_tokens.unsqueeze(0).clone()
 
             for _ in range(max_new_tokens):
                 if next_token_id.item() == eos_token_id:
@@ -419,7 +422,6 @@ class TranslationBackend:
         )
         target = results[0].hypotheses[0][1:]
         result_token_ids = self.tokenizer.convert_tokens_to_ids(target)
-        result = self.tokenizer.decode(self.tokenizer.convert_tokens_to_ids(target))
         return result_token_ids
 
 
