@@ -199,18 +199,32 @@ LANGUAGES = [
     {"name": "Eastern Yiddish", "nllb": "ydd_Hebr", "language_code": "yi"},
     {"name": "Yoruba", "nllb": "yor_Latn", "language_code": "yo"},
     {"name": "Yue Chinese", "nllb": "yue_Hant", "language_code": "yue"},
-    {"name": "Chinese (Simplified)", "nllb": "zho_Hans", "language_code": "zh-CN"},
+    {"name": "Chinese (Simplified)", "nllb": "zho_Hans", "language_code": ["zh-CN", "zh"]},
     {"name": "Chinese (Traditional)", "nllb": "zho_Hant", "language_code": "zh-TW"},
     {"name": "Standard Malay", "nllb": "zsm_Latn", "language_code": "ms"},
     {"name": "Zulu", "nllb": "zul_Latn", "language_code": "zu"},
 ]
 
 NAME_TO_NLLB = {lang["name"]: lang["nllb"] for lang in LANGUAGES}
-NAME_TO_LANGUAGE_CODE = {lang["name"]: lang["language_code"] for lang in LANGUAGES}
-LANGUAGE_CODE_TO_NLLB = {lang["language_code"]: lang["nllb"] for lang in LANGUAGES}
-NLLB_TO_LANGUAGE_CODE = {lang["nllb"]: lang["language_code"] for lang in LANGUAGES}
-LANGUAGE_CODE_TO_NAME = {lang["language_code"]: lang["name"] for lang in LANGUAGES}
 NLLB_TO_NAME = {lang["nllb"]: lang["name"] for lang in LANGUAGES}
+
+
+# Helper function to normalize language_code to list
+def _get_language_codes(lang):
+    codes = lang["language_code"]
+    return codes if isinstance(codes, list) else [codes]
+
+
+# Build dictionaries that support multiple language_codes per entry
+NAME_TO_LANGUAGE_CODE = {lang["name"]: _get_language_codes(lang)[0] for lang in LANGUAGES}
+NLLB_TO_LANGUAGE_CODE = {lang["nllb"]: _get_language_codes(lang)[0] for lang in LANGUAGES}
+
+LANGUAGE_CODE_TO_NLLB = {}
+LANGUAGE_CODE_TO_NAME = {}
+for lang in LANGUAGES:
+    for code in _get_language_codes(lang):
+        LANGUAGE_CODE_TO_NLLB[code] = lang["nllb"]
+        LANGUAGE_CODE_TO_NAME[code] = lang["name"]
 
 
 def get_nllb_code(language_code_code):
@@ -241,14 +255,20 @@ def get_language_name_by_nllb(nllb_code):
     return NLLB_TO_NAME.get(nllb_code)
 
 
+def _match_language_code(lang, identifier):
+    """Check if identifier matches any of the language codes (case-insensitive)."""
+    codes = _get_language_codes(lang)
+    identifier_lower = identifier.lower()
+    return any(code == identifier or code.lower() == identifier_lower for code in codes)
+
+
 def get_language_info(identifier, identifier_type="auto"):
     if identifier_type == "auto":
         for lang in LANGUAGES:
-            if (lang["name"].lower() == identifier.lower() or 
-                lang["nllb"] == identifier or 
-                lang["nllb"].lower() == identifier.lower() or
-                lang["language_code"] == identifier or
-                lang["language_code"].lower() == identifier.lower()):
+            if (lang["name"].lower() == identifier.lower() or
+                    lang["nllb"] == identifier or
+                    lang["nllb"].lower() == identifier.lower() or
+                    _match_language_code(lang, identifier)):
                 return lang
     elif identifier_type == "name":
         for lang in LANGUAGES:
@@ -260,7 +280,7 @@ def get_language_info(identifier, identifier_type="auto"):
                 return lang
     elif identifier_type == "language_code":
         for lang in LANGUAGES:
-            if lang["language_code"] == identifier or lang["language_code"].lower() == identifier.lower():
+            if _match_language_code(lang, identifier):
                 return lang
     
     return None
@@ -286,4 +306,7 @@ def list_all_nllb_codes():
 
 
 def list_all_language_code_codes():
-    return [lang["language_code"] for lang in LANGUAGES]
+    codes = []
+    for lang in LANGUAGES:
+        codes.extend(_get_language_codes(lang))
+    return codes
