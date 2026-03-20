@@ -68,6 +68,9 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "infogain": "info_gain_threshold",
         "shiftk": "shift_k_threshold",
         "confirm": "border_confirm",
+        "lsg": "lsg_kl_threshold",
+        "lsgk": "lsg_k",
+        "cmplx": "complexity_adaptive",
     }
 
     grid = {}
@@ -133,6 +136,9 @@ def run_benchmark(args):
         info_gain_threshold=args.info_gain,
         shift_k_threshold=args.shift_k,
         border_confirm=args.border_confirm,
+        lsg_kl_threshold=args.lsg_kl,
+        lsg_k=args.lsg_k,
+        complexity_adaptive=args.complexity_adaptive,
     )
 
     backend = create_backend(config)
@@ -295,6 +301,12 @@ def main():
                         help="Shift-k border mass threshold (0.4=recommended, None=disabled)")
     parser.add_argument("--border-confirm", type=int, default=1,
                         help="Require N consecutive border hits to stop (1=disabled, 2=recommended)")
+    parser.add_argument("--lsg-kl", type=float, default=None,
+                        help="LSG logit KL threshold (7.0=recommended, None=disabled)")
+    parser.add_argument("--lsg-k", type=int, default=3,
+                        help="LSG: number of source tokens to remove for probe (default: 3)")
+    parser.add_argument("--complexity-adaptive", action="store_true",
+                        help="Enable per-sentence complexity-adaptive bd/wb/gen_cap")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

@@ -38,10 +38,12 @@ from .alignatt import (
     check_border_shift_k,
     compute_dynamic_word_batch,
     compute_entropy,
+    compute_logit_kl,
     is_target_language,
     load_head_config,
     list_aggregation_methods,
 )
+from .complexity import adaptive_params_from_complexity
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
 from .backend_protocol import (
     SimulMTBackend,
@@ -176,11 +178,27 @@ class AlignAttBackend(SimulMTBackend):
             self._source_words.append(source_word)
             self._batch_counter += 1
 
-            # Dynamic or fixed word batching
+            # Effective parameters (may be overridden by complexity)
+            effective_bd = self.config.border_distance
             effective_wb = self.config.word_batch
+            effective_gen_cap = self.config.max_new_per_step
+
+            # Complexity-adaptive parameters: adjust bd/wb/gen per sentence
+            accumulated_source = " ".join(self._source_words)
+            if self.config.complexity_adaptive and len(self._source_words) >= 3:
+                effective_bd, effective_wb, effective_gen_cap = (
+                    adaptive_params_from_complexity(
+                        accumulated_source,
+                        base_bd=self.config.border_distance,
+                        base_wb=self.config.word_batch,
+                        base_gen_cap=self.config.max_new_per_step,
+                    )
+                )
+
+            # Dynamic word batching (applied on top of complexity)
             if self.config.dynamic_word_batch:
                 effective_wb = compute_dynamic_word_batch(
-                    self.config.word_batch, len(self._source_words)
+                    effective_wb, len(self._source_words)
                 )
 
             # Word batching: skip until we have enough words
@@ -193,8 +211,6 @@ class AlignAttBackend(SimulMTBackend):
                     generation_time_ms=(time.time() - t0) * 1000,
                 )
             self._batch_counter = 0
-
-            accumulated_source = " ".join(self._source_words)
 
             # Create context on first call per segment
             if self._ctx is None:
@@ -254,7 +270,7 @@ class AlignAttBackend(SimulMTBackend):
             new_ids = []
             stopped_at_border = False
             is_final_step = is_final
-            max_gen = self.config.max_new_per_step if not is_final_step else 256
+            max_gen = effective_gen_cap if not is_final_step else 256
             consecutive_border_hits = 0  # For border confirmation
 
             for step in range(max_gen):
@@ -292,7 +308,7 @@ class AlignAttBackend(SimulMTBackend):
                         if use_combined:
                             border_hit, _, _ = check_border_combined(
                                 src_attn, self._ts_scores,
-                                num_src_tokens, self.config.border_distance,
+                                num_src_tokens, effective_bd,
                                 aggregation=self.config.aggregation,
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
@@ -306,7 +322,7 @@ class AlignAttBackend(SimulMTBackend):
                         elif self.config.dynamic_border:
                             border_hit = check_border_dynamic(
                                 src_attn, self._ts_scores,
-                                num_src_tokens, self.config.border_distance,
+                                num_src_tokens, effective_bd,
                                 aggregation=self.config.aggregation,
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
@@ -315,7 +331,7 @@ class AlignAttBackend(SimulMTBackend):
                         else:
                             border_hit = check_border(
                                 src_attn, self._ts_scores,
-                                num_src_tokens, self.config.border_distance,
+                                num_src_tokens, effective_bd,
                                 aggregation=self.config.aggregation,
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
@@ -324,6 +340,21 @@ class AlignAttBackend(SimulMTBackend):
                         if border_hit:
                             consecutive_border_hits += 1
                             if consecutive_border_hits >= self.config.border_confirm:
+                                # LSG confirmation: if enabled, probe whether
+                                # removing last K source tokens changes the
+                                # output distribution. High KL = source still
+                                # matters -> override border and keep generating.
+                                if self.config.lsg_kl_threshold is not None:
+                                    lsg_kl = self._lsg_probe(
+                                        next_tok, pos, src_end
+                                    )
+                                    if (lsg_kl is not None
+                                            and lsg_kl > self.config.lsg_kl_threshold):
+                                        # Source tokens still influencing output;
+                                        # override border, keep generating
+                                        consecutive_border_hits = 0
+                                        new_ids.append(next_tok)
+                                        continue
                                 stopped_at_border = True
                                 break
                         else:
@@ -365,6 +396,65 @@ class AlignAttBackend(SimulMTBackend):
                 source_words_seen=len(self._source_words),
                 generation_time_ms=elapsed_ms,
             )
+
+    def _lsg_probe(self, last_token: int, pos: int,
+                   src_end: int) -> Optional[float]:
+        """Perform LSG logit KL probe via KV cache forking.
+
+        Compares output logits with full source vs reduced source (last K
+        source tokens removed). Returns KL divergence or None on failure.
+
+        Method (LSG, arxiv 2501.00868):
+            1. Get full-source logits (already available from main decode)
+            2. Fork KV cache to seq_id=1
+            3. Remove last lsg_k source token positions from the fork
+            4. Remove the last decoded position from the fork
+            5. Re-decode the same token on the fork (without full source)
+            6. Compare logit distributions via KL divergence
+            7. Clean up the fork
+
+        The KL measures "did the last K source tokens change the prediction?"
+        Low KL = source exhausted (safe to WRITE), High KL = source matters (READ).
+        """
+        lsg_k = min(self.config.lsg_k, src_end - len(self._prefix_tokens))
+        if lsg_k <= 0:
+            return None
+
+        # 1. Get full-source logits (from the main decode chain)
+        logits_full = ll.get_logits_array(self._ctx, -1, self._nv)
+        if logits_full is None:
+            return None
+
+        # 2. Fork KV cache: copy seq 0 -> seq 1 for positions [0, pos)
+        ll.memory_seq_cp(self._mem, 0, 1, 0, pos)
+
+        try:
+            # 3. Remove last K source tokens from the fork
+            #    Source tokens occupy [prefix_len, src_end)
+            #    Remove [src_end - lsg_k, src_end) from seq 1
+            rm_start = src_end - lsg_k
+            ll.memory_seq_rm(self._mem, 1, rm_start, src_end)
+
+            # 4. Remove the entry at pos-1 (last decoded token) from seq 1
+            #    so we can re-decode it to get fresh logits
+            ll.memory_seq_rm(self._mem, 1, pos - 1, pos)
+
+            # 5. Re-decode the same token on seq 1
+            ret = ll.decode_single_at(
+                self._ctx, last_token, pos - 1, seq_id=1, output=True
+            )
+            if ret != 0:
+                return None
+
+            # 6. Get reduced-source logits and compute KL
+            logits_reduced = ll.get_logits_array(self._ctx, 0, self._nv)
+            if logits_reduced is None:
+                return None
+
+            return compute_logit_kl(logits_full, logits_reduced)
+        finally:
+            # 7. Clean up: remove all seq 1 entries
+            ll.memory_seq_rm(self._mem, 1, 0, -1)
 
     def _init_segment(self):
         """Initialize a new segment: create context, decode prefix."""

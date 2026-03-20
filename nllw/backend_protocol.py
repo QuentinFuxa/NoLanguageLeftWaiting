@@ -97,6 +97,22 @@ class BackendConfig:
     # Prevents false positive stops from transient attention patterns.
     # 1 = standard (stop on first hit), 2 = require 2 consecutive hits, etc.
     border_confirm: int = 1  # 1=disabled, 2=recommended for high quality
+    # LSG logit KL divergence (arxiv 2501.00868, AAAI 2025):
+    # Compare output logit distributions with full source vs reduced source
+    # (last lsg_k source tokens removed via KV cache fork).
+    # Low KL = source is exhausted -> reinforce border stop (WRITE).
+    # High KL = source still matters -> inhibit border stop (READ more).
+    # None=disabled, 7.0=recommended for 7B models. Range: 5.0-9.0.
+    lsg_kl_threshold: Optional[float] = None
+    # Number of source tokens to remove for the reduced-source probe.
+    # Larger k tests more "distant" source dependency.
+    # 3=default (matches word_batch), range: 1-5.
+    lsg_k: int = 3
+    # Complexity-adaptive parameters: estimate source sentence complexity from
+    # text features (word count, avg length, numeral density, subword ratio)
+    # and adjust border_distance, word_batch, and generation cap per-sentence.
+    # Simple sentences -> aggressive (smaller bd/wb), complex -> conservative.
+    complexity_adaptive: bool = False
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

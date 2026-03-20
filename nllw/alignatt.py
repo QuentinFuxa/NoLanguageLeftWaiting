@@ -1198,6 +1198,50 @@ def check_border_combined(
     return standard_hit, info_gain_val, border_mass_val
 
 
+def compute_logit_kl(
+    logits_full: np.ndarray,
+    logits_reduced: np.ndarray,
+) -> float:
+    """Compute KL divergence between two logit distributions.
+
+    Implements the core LSG signal (arxiv 2501.00868, AAAI 2025): compare
+    output logit distributions with full source vs reduced source (last K
+    source tokens removed). The KL divergence measures how much the removed
+    source tokens affect the model's prediction.
+
+    KL(P_full || P_reduced):
+      - LOW KL (< delta): removing source tokens didn't change prediction
+        -> the model doesn't need more source -> safe to WRITE (emit tokens)
+      - HIGH KL (> delta): removing tokens changed the prediction significantly
+        -> the model is still using recent source -> should READ more
+
+    This is an orthogonal signal to attention-based border detection:
+    attention measures WHERE the model looks, logit KL measures WHETHER
+    looking there changed the OUTPUT.
+
+    Args:
+        logits_full: Raw logits with full source (n_vocab,)
+        logits_reduced: Raw logits with reduced source (n_vocab,)
+
+    Returns:
+        KL divergence in nats. Typical range: [0, 15+]
+        LSG paper recommends delta thresholds of 5.0-9.0 for 7B models.
+    """
+    # Stable softmax for both distributions
+    lf = logits_full - np.max(logits_full)
+    lr = logits_reduced - np.max(logits_reduced)
+
+    p = np.exp(lf)
+    p = p / p.sum()
+    q = np.exp(lr)
+    q = q / q.sum()
+
+    eps = 1e-10
+    # KL(P || Q) = sum(p * log(p / q))
+    kl = float(np.sum(p * np.log((p + eps) / (q + eps))))
+    return max(0.0, kl)  # guard against numerical noise
+
+
 def adaptive_border_distance(
     base_bd: int,
     confidence: float,
