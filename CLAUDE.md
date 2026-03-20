@@ -128,7 +128,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~10,100 lines across 23 SimulMT modules, 441 tests
+### What exists now: ~10,300 lines across 23 SimulMT modules, 495 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -152,11 +152,11 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `analysis.py` | 309 | Pareto frontier, edge cases, report generation |
 | `detect_heads.py` | 559 | Auto alignment head detection for any GGUF model |
 | `metrics.py` | 330 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics + NE (Normalized Erasure) |
-| `bench.py` | 340 | Unified one-command benchmarking CLI with sweep, compare, 18+ shortnames |
+| `bench.py` | 365 | Unified one-command benchmarking CLI with sweep, compare, 20+ shortnames |
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 1292 | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL |
+| `alignatt.py` | 1465+ | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL + source coverage + monotonicity |
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
 
@@ -177,10 +177,12 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - Dynamic word_batch: source-length-adaptive batching (short->wb-1, long->wb+1)
 - Attention information gain: KL-divergence border modulation (inhibit/reinforce stops)
 - Shift-k border: attention mass threshold in border region (DrFrattn-inspired)
-- Combined border check: multi-signal fusion (standard + shift-k + info gain + entropy change + prediction stability)
+- Combined border check: multi-signal fusion (standard + shift-k + info gain + entropy change + prediction stability + coverage + monotonicity)
 - LSG logit KL divergence (arxiv 2501.00868): KV cache fork + probe, output logit comparison for border confirmation
 - Entropy change tracking (REINA-inspired, AAAI 2026): cross-step entropy delta as border modulation
 - Prediction stability index (novel): cross-step top-K prediction overlap as border modulation
+- Source coverage guard (novel): attention coverage tracking for hallucination prevention
+- Attention monotonicity (novel): dynamic border adjustment from attention movement patterns
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
@@ -212,6 +214,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `complexity_adaptive` | False | Per-sentence adaptive bd/wb/gen from text complexity features |
 | `entropy_change_threshold` | None | REINA entropy change (AAAI 2026). None=disabled, -0.5=recommended |
 | `prediction_stability` | False | Cross-step prediction stability modulation. Novel signal |
+| `coverage_threshold` | None | Source coverage guard. None=disabled, 0.3=recommended. Hallucination prevention |
+| `attention_monotonicity` | False | Attention monotonicity-based border adjustment. Novel signal |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 

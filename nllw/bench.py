@@ -73,6 +73,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "cmplx": "complexity_adaptive",
         "entchg": "entropy_change_threshold",
         "predstab": "prediction_stability",
+        "cov": "coverage_threshold",
+        "mono": "attention_monotonicity",
     }
 
     grid = {}
@@ -131,6 +133,8 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "complexity_adaptive": args.complexity_adaptive,
         "entropy_change_threshold": args.entropy_change,
         "prediction_stability": args.prediction_stability,
+        "coverage_threshold": args.coverage_threshold,
+        "attention_monotonicity": args.attention_monotonicity,
     }
 
 
@@ -313,6 +317,10 @@ def main():
                         help="REINA entropy change threshold (-0.5=recommended, None=disabled)")
     parser.add_argument("--prediction-stability", action="store_true",
                         help="Enable cross-step prediction stability border modulation")
+    parser.add_argument("--coverage-threshold", type=float, default=None,
+                        help="Source coverage guard threshold (0.3=recommended, None=disabled)")
+    parser.add_argument("--attention-monotonicity", action="store_true",
+                        help="Enable attention monotonicity-based border distance adjustment")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

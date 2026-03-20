@@ -1076,6 +1076,179 @@ def check_border_shift_k(
     return weighted_mass >= threshold
 
 
+def compute_source_coverage(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    min_attn_threshold: float = 0.05,
+) -> Tuple[float, np.ndarray]:
+    """Compute source coverage: fraction of source positions well-attended.
+
+    Novel hallucination guard for SimulMT: track how much of the source
+    is "covered" by attention across alignment heads. If coverage drops
+    below a threshold during generation, the model may be hallucinating
+    (generating from priors rather than translating the source).
+
+    For each source position, compute the max TS-weighted attention
+    received from any head. A position is "covered" if this value exceeds
+    min_attn_threshold. Coverage ratio = fraction of covered positions.
+
+    Key insight: during faithful translation, most source positions should
+    receive significant attention from at least one head. When coverage
+    drops, generation is no longer grounded in the source.
+
+    No published work on attention coverage as a hallucination guard
+    for simultaneous machine translation.
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights over source tokens
+        ts_scores: TS score for each head (higher = more reliable)
+        min_attn_threshold: Minimum attention to consider a position "covered"
+            (default: 0.05 = 5% of attention mass from at least one head)
+
+    Returns:
+        (coverage_ratio, coverage_per_position):
+            coverage_ratio: Fraction of source positions covered (0-1).
+                1.0 = all source positions attended. < 0.3 = likely hallucinating.
+            coverage_per_position: (n_src,) max TS-weighted attention per position.
+    """
+    n_heads, n_src = src_attn.shape
+    if n_src == 0:
+        return 1.0, np.array([])
+
+    eps = 1e-10
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < eps:
+        ts = np.ones(n_heads) / n_heads
+    else:
+        ts = ts / ts_sum
+
+    # Normalize attention per head
+    attn_norm = np.zeros_like(src_attn)
+    for h in range(n_heads):
+        total = src_attn[h].sum()
+        if total > eps:
+            attn_norm[h] = src_attn[h] / total
+
+    # For each source position, compute TS-weighted max attention
+    # across heads. A position is "covered" if any head with decent
+    # TS score pays attention to it.
+    # Method: TS-weighted sum of attention at each position
+    coverage_per_pos = np.zeros(n_src, dtype=np.float64)
+    for h in range(n_heads):
+        coverage_per_pos += ts[h] * attn_norm[h]
+
+    # A position is covered if it receives >= threshold total weighted attention
+    covered = coverage_per_pos >= min_attn_threshold
+    coverage_ratio = float(covered.sum()) / n_src
+
+    return coverage_ratio, coverage_per_pos
+
+
+def coverage_supports_write(
+    coverage_ratio: float,
+    min_coverage: float = 0.3,
+) -> bool:
+    """Interpret source coverage as a WRITE/hallucination signal.
+
+    Args:
+        coverage_ratio: From compute_source_coverage() (0-1)
+        min_coverage: Minimum acceptable coverage ratio. Below this,
+            the model is likely hallucinating. Default: 0.3.
+
+    Returns:
+        True if coverage is acceptable (supports continued generation).
+        False if coverage is too low (hallucination risk, should stop).
+    """
+    return coverage_ratio >= min_coverage
+
+
+def compute_attention_monotonicity(
+    positions_history: List[float],
+) -> float:
+    """Compute monotonicity score of attention positions across generation steps.
+
+    Measures how consistently attention moves forward (left-to-right) through
+    the source during generation. In translation, attention should generally
+    progress monotonically through the source (with some reordering allowed).
+
+    Uses a normalized Kendall tau-like metric: count concordant vs discordant
+    consecutive pairs. Score in [-1, 1]:
+        1.0 = perfectly monotonic (always moves forward)
+        0.0 = random movement
+       -1.0 = perfectly reverse (always moves backward)
+
+    Novel: no published work on attention monotonicity scoring for
+    decoder-only LLM simultaneous translation border detection.
+
+    Key uses:
+    - Monotonic attention -> straightforward translation -> tighter border
+    - Non-monotonic attention -> reordering happening -> wider border needed
+    - Strongly negative -> possible hallucination loop (repeating)
+
+    Args:
+        positions_history: List of attended source positions across
+            consecutive generation steps (from aggregate()).
+
+    Returns:
+        Monotonicity score in [-1, 1]. Empty or single-element returns 0.0.
+    """
+    n = len(positions_history)
+    if n < 2:
+        return 0.0
+
+    concordant = 0
+    discordant = 0
+    for i in range(n - 1):
+        diff = positions_history[i + 1] - positions_history[i]
+        if diff > 0:
+            concordant += 1
+        elif diff < 0:
+            discordant += 1
+        # diff == 0 -> tie, neither concordant nor discordant
+
+    total = concordant + discordant
+    if total == 0:
+        return 0.0  # All positions identical
+
+    return (concordant - discordant) / total
+
+
+def monotonicity_border_adjustment(
+    monotonicity: float,
+    base_bd: int,
+    max_increase: int = 2,
+) -> int:
+    """Adjust border distance based on attention monotonicity.
+
+    Monotonic attention (score > 0.5) suggests straightforward translation;
+    we can use a tighter border for lower latency. Non-monotonic attention
+    (score < 0) suggests reordering or confusion; widen the border for safety.
+
+    Args:
+        monotonicity: Score from compute_attention_monotonicity() [-1, 1]
+        base_bd: Base border distance from config
+        max_increase: Maximum border distance increase for non-monotonic (default: 2)
+
+    Returns:
+        Adjusted border distance (always >= 1)
+    """
+    if monotonicity >= 0.7:
+        # Highly monotonic -> tighten border
+        delta = -1
+    elif monotonicity >= 0.3:
+        # Normal -> keep base
+        delta = 0
+    elif monotonicity >= 0.0:
+        # Mildly non-monotonic -> slight widening
+        delta = 1
+    else:
+        # Negative monotonicity -> significant reordering or hallucination
+        delta = max_increase
+
+    return max(1, base_bd + delta)
+
+
 def check_border_combined(
     src_attn: np.ndarray,
     ts_scores: List[float],
@@ -1092,22 +1265,24 @@ def check_border_combined(
     entropy_change: Optional[float] = None,
     entropy_change_threshold: Optional[float] = None,
     pred_stability_write: Optional[bool] = None,
+    coverage_threshold: Optional[float] = None,
+    positions_history: Optional[List[float]] = None,
+    monotonicity_enabled: bool = False,
 ) -> Tuple[bool, Optional[float], Optional[float]]:
     """Combined border check with all available signals.
 
     Combines: standard AlignAtt + shift-k mass + info gain +
-    entropy change (REINA) + prediction stability (novel).
+    entropy change (REINA) + prediction stability (novel) +
+    source coverage guard (novel) + attention monotonicity (novel).
     Returns the border decision plus diagnostic values.
 
     Decision logic:
-        1. Cross-step pre-filter: if entropy change indicates strong READ
-           signal (large entropy drop from new source word), inhibit stop
-        2. If shift_k_threshold is set and border mass >= threshold -> STOP
-        3. If info_gain_threshold is set and info_gain < threshold -> REINFORCE STOP
-           (only stops if standard border also says stop)
-        4. If info_gain > threshold*3 -> INHIBIT STOP (override if info gain high)
-        5. Standard AlignAtt border check as fallback
-        6. Cross-step post-filter: prediction stability can modulate final decision
+        0a. Cross-step pre-filter: entropy change (REINA)
+        0b. Source coverage guard: if coverage drops below threshold -> force STOP
+        1. If shift_k_threshold is set and border mass >= threshold -> STOP
+        2. If info_gain_threshold is set, modulate stop decisions
+        3. Standard AlignAtt border check (with monotonicity-adjusted bd)
+        4. Cross-step post-filter: prediction stability modulation
 
     Args:
         src_attn, ts_scores, n_src_tokens, border_distance: Standard border params
@@ -1117,13 +1292,16 @@ def check_border_combined(
         prev_attn: Previous step attention (for info gain)
         info_gain_threshold: If set, enable info gain modulation
         dynamic_border: If True, use entropy-based dynamic border
-        entropy_change: Pre-computed entropy change from compute_entropy_change()
-            (REINA signal). Negative = entropy dropped (source informative).
-        entropy_change_threshold: Threshold for entropy change (default: None).
-            If delta < threshold, inhibit border stop (source still informative).
-        pred_stability_write: Pre-computed from prediction_stability_supports_write().
-            True = predictions stable (supports WRITE). False = volatile (READ).
-            None = signal unavailable.
+        entropy_change: Pre-computed entropy change (REINA)
+        entropy_change_threshold: Threshold for entropy change
+        pred_stability_write: Pre-computed prediction stability signal
+        coverage_threshold: If set, enable source coverage guard. If coverage
+            drops below this value, force stop (hallucination prevention).
+            None=disabled, 0.3=recommended.
+        positions_history: List of attended positions from generation loop
+            (for monotonicity computation). None=disabled.
+        monotonicity_enabled: If True and positions_history provided, adjust
+            border distance based on attention monotonicity.
 
     Returns:
         (border_hit, info_gain_value, border_mass_value)
@@ -1135,19 +1313,27 @@ def check_border_combined(
     info_gain_val = None
     border_mass_val = None
 
-    # 0. Cross-step pre-filter: entropy change (REINA-inspired)
-    # If adding the new source word caused a large entropy drop, the model
-    # is actively learning from source -> inhibit stop
+    # 0a. Cross-step pre-filter: entropy change (REINA-inspired)
     if (entropy_change is not None and entropy_change_threshold is not None
             and entropy_change < entropy_change_threshold):
-        # Strong READ signal: entropy dropped significantly
         return False, None, None
+
+    # 0b. Source coverage guard (novel): if source coverage is too low,
+    # the model is likely hallucinating -> force stop
+    if coverage_threshold is not None:
+        cov_ratio, _ = compute_source_coverage(attn, ts_scores)
+        if not coverage_supports_write(cov_ratio, min_coverage=coverage_threshold):
+            return True, info_gain_val, border_mass_val
+
+    # 0c. Monotonicity-adjusted border distance
+    effective_bd = border_distance
+    if monotonicity_enabled and positions_history and len(positions_history) >= 3:
+        mono_score = compute_attention_monotonicity(positions_history)
+        effective_bd = monotonicity_border_adjustment(mono_score, border_distance)
 
     # 1. Compute info gain if available
     if prev_attn is not None and info_gain_threshold is not None:
-        # Ensure shapes match (prev may have fewer source tokens)
         if prev_attn.shape[1] <= attn.shape[1]:
-            # Pad prev_attn to match current
             padded_prev = np.zeros_like(attn)
             padded_prev[:, :prev_attn.shape[1]] = prev_attn
             info_gain_val = compute_attention_info_gain(padded_prev, attn, ts_scores)
@@ -1156,19 +1342,17 @@ def check_border_combined(
                 prev_attn[:, :attn.shape[1]], attn, ts_scores
             )
 
-        # High info gain = model processing new info, inhibit stop
         if info_gain_val > info_gain_threshold * 3:
             return False, info_gain_val, None
 
     # 2. Shift-k mass check
     if shift_k_threshold is not None:
         shift_k_hit = check_border_shift_k(
-            attn, ts_scores, n_src_tokens, border_distance,
+            attn, ts_scores, n_src_tokens, effective_bd,
             threshold=shift_k_threshold,
-            head_temp_normalize=False,  # already done above
+            head_temp_normalize=False,
         )
-        # Compute mass for diagnostics
-        border_start = n_src_tokens - border_distance
+        border_start = n_src_tokens - effective_bd
         if border_start > 0:
             eps = 1e-10
             n_heads = attn.shape[0]
@@ -1187,10 +1371,8 @@ def check_border_combined(
                 border_mass_val = float(np.mean(mass_per_head))
 
         if shift_k_hit:
-            # Low info gain reinforces the stop
             if info_gain_val is not None and info_gain_val < info_gain_threshold:
                 return True, info_gain_val, border_mass_val
-            # Shift-k alone is sufficient
             return True, info_gain_val, border_mass_val
 
     # 3. Standard AlignAtt border check
@@ -1200,29 +1382,23 @@ def check_border_combined(
 
     if dynamic_border:
         effective_bd = dynamic_border_distance(
-            attn, ts_scores, border_distance, n_src_tokens,
+            attn, ts_scores, effective_bd, n_src_tokens,
         )
-        border_threshold = n_src_tokens - effective_bd
-    else:
-        border_threshold = n_src_tokens - border_distance
 
+    border_threshold = n_src_tokens - effective_bd
     if border_threshold <= 0:
         return False, info_gain_val, border_mass_val
 
     attended_pos = aggregate(attn, ts_scores, method=method)
     standard_hit = attended_pos >= border_threshold
 
-    # Info gain modulation: if standard says stop but info gain is medium-high, override
     if standard_hit and info_gain_val is not None:
         if info_gain_val > info_gain_threshold * 1.5:
             return False, info_gain_val, border_mass_val
 
     # 4. Cross-step post-filter: prediction stability modulation
-    # If attention says stop but predictions are volatile (READ signal),
-    # override the stop to keep generating
     if standard_hit and pred_stability_write is not None:
         if not pred_stability_write:
-            # Predictions are volatile -> model still adapting -> override stop
             return False, info_gain_val, border_mass_val
 
     return standard_hit, info_gain_val, border_mass_val
