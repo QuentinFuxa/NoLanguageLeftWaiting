@@ -128,7 +128,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~9,500 lines across 23 SimulMT modules, 352 tests
+### What exists now: ~9,900 lines across 23 SimulMT modules, 396 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -156,7 +156,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 1170 | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check |
+| `alignatt.py` | 1292 | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL |
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
 
@@ -178,6 +178,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - Attention information gain: KL-divergence border modulation (inhibit/reinforce stops)
 - Shift-k border: attention mass threshold in border region (DrFrattn-inspired)
 - Combined border check: multi-signal fusion (standard + shift-k + info gain)
+- LSG logit KL divergence (arxiv 2501.00868): KV cache fork + probe, output logit comparison for border confirmation
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
@@ -204,6 +205,9 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `info_gain_threshold` | None | KL-divergence threshold for border modulation. None=disabled, 0.3=recommended |
 | `shift_k_threshold` | None | Attention mass threshold for border stop. None=disabled, 0.4=recommended |
 | `border_confirm` | 1 | Require N consecutive border hits. 1=disabled, 2=recommended |
+| `lsg_kl_threshold` | None | LSG logit KL (arxiv 2501.00868). None=disabled, 7.0=recommended for 7B |
+| `lsg_k` | 3 | Number of source tokens to remove for LSG probe (1-5) |
+| `complexity_adaptive` | False | Per-sentence adaptive bd/wb/gen from text complexity features |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 

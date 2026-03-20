@@ -163,6 +163,29 @@
   - Research documented in `docs/research/drfrattn-analysis.md`
 - [x] 360 unit tests (70 new, all passing)
 
+## DONE -- Iteration 8: LSG Logit KL Divergence
+
+- [x] **LSG logit KL divergence** (`lsg_kl_threshold` config, `--lsg-kl` CLI):
+  - Implements LSG paper (arxiv 2501.00868, AAAI 2025): training-free border confirmation
+  - KV cache fork + probe: copy cache, remove last K source tokens, re-decode, compare logits
+  - Low KL = source exhausted -> confirm border stop (WRITE)
+  - High KL = source still matters -> override border stop (READ more)
+  - Orthogonal signal to attention-based border: attention = WHERE model looks, logit KL = WHETHER output CHANGES
+  - `compute_logit_kl()` in alignatt.py (stable softmax, numerical guard)
+  - Integrated into both AlignAtt and AlignAtt-LA backends (all 3 retranslation methods)
+  - `--lsg-kl 7.0 --lsg-k 3` CLI flags
+  - `lsg=5.0,7.0,9.0 lsgk=1,3,5` sweep shortnames
+  - Overhead: ~1 extra forward pass per border check (~1-3ms on A40)
+- [x] **Complexity-adaptive parameters** (`complexity_adaptive` config, `--complexity-adaptive` CLI):
+  - Wires `complexity.py` into both AlignAtt and AlignAtt-LA backends
+  - Per-sentence estimation: word count, avg word length, numeral density, subword ratio
+  - Simple sentences -> reduced bd/wb (lower latency)
+  - Complex sentences -> increased bd/wb (higher quality)
+  - Applied BEFORE dynamic word_batch (stacks with it)
+  - In LA backend: sets `_effective_bd` used by `_check_border()`
+  - `--complexity-adaptive` CLI flag, `cmplx=0,1` sweep shortname
+- [x] 396 unit tests (36 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -201,11 +224,19 @@
 - [ ] **Full iteration 7 sweep**: `python -m nllw.bench --sweep "dynwb=0,1 shiftk=0.4 infogain=0.3" --lang en-zh --comet --save`
 - [ ] **Border confirmation sweep**: `python -m nllw.bench --sweep "confirm=1,2,3" --lang en-zh --comet --save`
 - [ ] **Combined shift-k + confirm**: `python -m nllw.bench --shift-k 0.4 --border-confirm 2 --lang en-zh --comet --save`
+- [ ] **LSG KL threshold sweep**: `python -m nllw.bench --sweep "lsg=5.0,7.0,9.0" --lang en-zh --comet --save`
+- [ ] **LSG K sweep**: `python -m nllw.bench --sweep "lsg=7.0 lsgk=1,3,5" --lang en-zh --comet --save`
+- [ ] **LSG + shift-k combined**: `python -m nllw.bench --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save`
+- [ ] **LSG + border confirm**: `python -m nllw.bench --lsg-kl 7.0 --border-confirm 2 --lang en-zh --comet --save`
+- [ ] **Full iteration 8 sweep**: `python -m nllw.bench --sweep "lsg=5.0,7.0,9.0 shiftk=0.4" --lang en-zh --comet --save`
+- [ ] **Complexity-adaptive test**: `python -m nllw.bench --complexity-adaptive --lang en-zh --comet --save` vs fixed bd/wb
+- [ ] **Complexity + LSG combined**: `python -m nllw.bench --complexity-adaptive --lsg-kl 7.0 --lang en-zh --comet --save`
+- [ ] **Complexity + dynamic-wb combined**: `python -m nllw.bench --complexity-adaptive --dynamic-wb --lang en-zh --comet --save`
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
 ### HIGHEST Priority (ready to implement)
-- [ ] **LSG logit KL divergence** (arxiv 2501.00868, AAAI 2025, TRAINING-FREE): Compare output logit distributions with full vs reduced source. Direct signal: "did more source change the output?" KL > delta -> keep generating. Need `llama_kv_cache_seq_cp` in llama_backend.py. Code: github.com/ictnlp/LSG. See `docs/research/reina-lsg-analysis.md`.
+- [x] **LSG logit KL divergence** (IMPLEMENTED, iteration 8): KV cache fork + probe for border confirmation. `--lsg-kl 7.0` CLI. **Needs GPU testing.**
 
 ### High Priority (open research gaps, no published work)
 - [x] **Novel aggregation** (IMPLEMENTED): 9 methods total -- ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble. **Needs GPU testing.**
@@ -240,6 +271,13 @@
 - [ ] **DrFrattn attention-based policy** (EMNLP 2025): Closest published work to our AlignAtt. "Shift-k" mechanism for adaptive thresholds -- must read.
 - [ ] **StreamingThinker parallel KV** (arxiv 2510.17238, ICLR 2026): Parallel KV caches decouple source encoding from generation. 80% pre-reasoning latency reduction.
 - [ ] **RL-optimized SSBD** (arxiv 2603.01639, ICLR 2026): RL-optimize SSBD beta per-context instead of fixed 0.2. 2.24-4.32x speedup.
+
+### NEW High Priority (March 2026 Research Agent Findings)
+- [ ] **SimulU cross-attention policy** (arxiv 2603.16924, March 2026): Training-free policy using cross-attention for long-form S2S. No training needed. Could be adapted for our LLM-based approach.
+- [ ] **Hikari WAIT token analysis** (arxiv 2603.11578, March 2026): Policy-free, embeds READ/WRITE into vocabulary. Fundamentally different from AlignAtt. Good competitive intelligence. SOTA on En-Ja/De/Ru.
+- [ ] **IWSLT 2026 baseline comparison**: Run our system against official baseline scores (Qwen3-4B). We should significantly outperform since Qwen3-4B is known inferior.
+- [ ] **Beam search for low-resource pairs**: CUNI uses 5 beams for Cs-En (their weakest pair). Consider adding beam search option.
+- [ ] **Sentence-level buffer trimming**: CUNI trims context differently per target language. Our context injection should be language-adaptive.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025) -- needs LoRA fine-tuning. Position mismatch validated as negligible. See analysis.
