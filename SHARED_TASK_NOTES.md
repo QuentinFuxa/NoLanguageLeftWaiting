@@ -1,8 +1,8 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## What exists now (after Iteration 9, 2026-03-20)
+## What exists now (after Iteration 10, 2026-03-20)
 
-**23 SimulMT modules (~10100 lines), 441 tests passing:**
+**23 SimulMT modules (~10300 lines), 495 tests passing:**
 
 ### Core (Iterations 1-7):
 - `nllw/prompts.py` -- 30+ prompt formats (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, Gemma)
@@ -66,6 +66,25 @@
   as instance variables, consumed by `_check_border()`, reset on segment boundary
 - 45 new tests (441 all passing)
 
+### New in Iteration 10:
+- **Source coverage guard** (novel, no published work):
+  - `compute_source_coverage()` in alignatt.py: TS-weighted coverage ratio
+  - Tracks what fraction of source positions are well-attended during generation
+  - Low coverage = hallucination (model generating from priors, not source)
+  - Integrated as early guard in `check_border_combined()` (step 0b)
+  - `--coverage-threshold 0.3` CLI, `cov=0.2,0.3,0.4` sweep shortname
+  - Zero overhead: reuses existing attention weights
+- **Attention monotonicity** (novel, no published work):
+  - `compute_attention_monotonicity()`: Kendall tau-like score [-1, 1]
+  - Tracks how monotonically attention moves forward through source during generation
+  - `monotonicity_border_adjustment()`: adapt border distance per generation context
+    - Monotonic (>0.7) -> tighter border (bd-1), non-monotonic (<0) -> wider border
+  - Position history tracked per generation loop, reset per translate()/retranslate()
+  - `--attention-monotonicity` CLI, `mono=0,1` sweep shortname
+  - Minimal overhead: one float per generation step
+- Both signals wired into AlignAtt and AlignAtt-LA backends
+- 54 new tests (495 all passing)
+
 ## What to do next
 
 ### Priority 1: Run experiments on A40 (ALL code is ready, NOTHING tested on GPU yet)
@@ -115,14 +134,34 @@ python -m nllw.bench --entropy-change -0.5 --lsg-kl 7.0 --lang en-zh --comet --s
 # 1j. Full cross-step signals (new in iteration 9)
 python -m nllw.bench --entropy-change -0.5 --prediction-stability --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save
 python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1" --lang en-zh --comet --save
+
+# 1k. Source coverage guard (new in iteration 10)
+python -m nllw.bench --sweep "cov=0.2,0.3,0.4,0.5" --lang en-zh --comet --save
+python -m nllw.bench --coverage-threshold 0.3 --shift-k 0.4 --lang en-zh --comet --save
+python -m nllw.bench --coverage-threshold 0.3 --lsg-kl 7.0 --lang en-zh --comet --save
+
+# 1l. Attention monotonicity (new in iteration 10)
+python -m nllw.bench --attention-monotonicity --lang en-zh --comet --save
+python -m nllw.bench --attention-monotonicity --coverage-threshold 0.3 --lang en-zh --comet --save
+
+# 1m. Full iteration 10 sweep
+python -m nllw.bench --sweep "cov=0.3 mono=0,1 shiftk=0.4" --lang en-zh --comet --save
+python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --lang en-zh --comet --save
 ```
 
-### Priority 2: Further optimizations
+### Priority 2: IWSLT 2026 Competition Integration (URGENT -- eval April 1-15)
+- **SimulStream wrapper**: Subclass `SpeechProcessor`, implement `process_chunk()` + `end_of_stream()`
+- **OmniSTEval compatibility**: Verify `omnisteval.py` output with latest `omnisteval longform` + XCOMET-XL
+- **Docker on H100 80GB**: Q8_0 7B GGUF = ~8GB, package llama.cpp + model + NLLW
+- **EN->IT is new for 2026** (replaces EN->JP). We have corpus + head configs ready.
+- **Key strategic insight**: CUNI won 2025 but could NOT use AlignAtt with EuroLLM (no attention extraction in CTranslate2). We CAN use AlignAtt with ANY model via llama.cpp -- unique advantage.
+
+### Priority 3: Further optimizations
 - **ExPosST position slots**: Pre-allocate KV positions for zero-recomputation
 - **SSD parallel speculation**: Multiple draft continuations for 2x speedup
 - **Group Position Encoding**: Separate position IDs for source/target (ACL 2025)
 
-### Priority 3: Research ideas (see todo.md)
+### Priority 4: Research ideas (see todo.md)
 - GRPO fine-tuning (RL-optimize read/write)
 - Syntax-aware chunking (SASST)
 - REINA information gain policy (AAAI 2026)
@@ -139,7 +178,7 @@ python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1" --lang en-zh --come
 - LA backend retranslation priority: SSBD > forced_decode > standard
 - Two-pass uses pass 1 (SSBD/forced/standard) + pass 2 (always standard) for diversity
 - `_check_border()` helper centralizes all border check params (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability)
-- `check_border_combined()` fuses multiple signals: standard + shift-k mass + info gain + entropy change + prediction stability
+- `check_border_combined()` fuses multiple signals: standard + shift-k mass + info gain + entropy change + prediction stability + source coverage guard + attention monotonicity
 - Cross-lingual head transfer: most models have >90% TS mass transfer across pairs
 - **LSG probe uses seq_id=1 fork**: `memory_seq_cp(0, 1)` + `memory_seq_rm(1, ...)` + re-decode + cleanup. Zero impact on main seq 0.
 - **Cross-step signals**: entropy change and prediction stability are computed once per translate() call (not per generation step). They modulate the border decision from attention-based checks.
@@ -157,7 +196,11 @@ python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1" --lang en-zh --come
 - **New iter8 sweeps**: `lsg=5.0,7.0,9.0`, `lsgk=1,3,5`, `cmplx=0,1`
 - **New iter9 params**: `entropy_change_threshold` (None=disabled, -0.5=recommended), `prediction_stability` (False=disabled)
 - **New iter9 sweeps**: `entchg=-0.3,-0.5,-1.0`, `predstab=0,1`
+- **New iter10 params**: `coverage_threshold` (None=disabled, 0.3=recommended), `attention_monotonicity` (False=disabled)
+- **New iter10 sweeps**: `cov=0.2,0.3,0.4`, `mono=0,1`
 - **Key insight**: Entropy change and prediction stability are OUTPUT-SPACE cross-step signals, orthogonal to attention-based within-step signals. They measure whether the MODEL'S BEHAVIOR changed after adding a new source word.
+- **Key insight (iter10)**: Source coverage is an INPUT-SPACE within-step signal -- it measures whether the model is grounded in ALL the source, not just which position it attends to. Orthogonal to argmax-based border detection.
+- **Key insight (iter10)**: Attention monotonicity is a TEMPORAL within-step signal -- it measures attention DYNAMICS across generation steps, not static attention at a single step.
 - **LSG implementation**: KV cache fork (seq_cp + seq_rm) + single-token re-decode + logit KL. ~1-3ms per probe.
 - **Key insight**: LSG is ORTHOGONAL to attention-based border: attention = WHERE model looks, logit KL = WHETHER removing source changes OUTPUT. Combining both gives stronger signal.
 - SOTA research documented in `docs/research/sota-simulmt-2026.md`
@@ -174,5 +217,13 @@ python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1" --lang en-zh --come
 - **Open gap**: No published work on combining logit KL + attention border (our LSG integration is novel)
 - **Open gap**: No published work on cross-step prediction stability for SimulMT (our prediction stability index is novel)
 - **Open gap**: No published work on entropy change as cross-step border modulation (our REINA integration is novel extension)
+- **Open gap**: No published work on attention coverage as hallucination guard for SimulMT (our coverage guard is novel)
+- **Open gap**: No published work on attention monotonicity scoring for decoder-only LLM SimulMT (our monotonicity metric is novel)
+- **Signal taxonomy (iteration 10)**:
+  - Within-step, position-based: standard AlignAtt, shift-k mass, info gain, AMS
+  - Within-step, input-coverage: source coverage guard (iter 10)
+  - Within-step, temporal: attention monotonicity (iter 10)
+  - Cross-step, output-space: entropy change (REINA), prediction stability
+  - Cross-step, output-logit: LSG logit KL divergence
 - **Hikari** is main competitor: policy-free WAIT tokens
 - **IWSLT 2026 metrics**: LongYAAL (primary latency), XCOMET-XL (primary quality)

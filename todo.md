@@ -217,6 +217,36 @@
   - `use_combined` condition extended to trigger on any multi-signal feature
 - [x] 441 unit tests (45 new, all passing)
 
+## DONE -- Iteration 10: Source Coverage Guard + Attention Monotonicity
+
+- [x] **Source coverage guard** (`coverage_threshold` config, `--coverage-threshold` CLI):
+  - Novel: no published work on attention coverage as hallucination guard for SimulMT
+  - Track what fraction of source positions receive significant attention from alignment heads
+  - `compute_source_coverage()`: TS-weighted coverage ratio (0=no coverage, 1=full)
+  - `coverage_supports_write()`: interpret coverage as continue/stop signal
+  - If coverage drops below threshold during generation, force stop (hallucination prevention)
+  - Integrated as early check in `check_border_combined()` (fires after entropy change pre-filter, before attention checks)
+  - Wired into both AlignAtt and AlignAtt-LA backends
+  - `--coverage-threshold 0.3` CLI flag, `cov=0.2,0.3,0.4` sweep shortname
+  - Zero overhead: reuses existing attention weights from border detection
+- [x] **Attention monotonicity** (`attention_monotonicity` config, `--attention-monotonicity` CLI):
+  - Novel: no published work on attention monotonicity scoring for decoder-only LLM SimulMT
+  - Track how monotonically attention progresses through source across generation steps
+  - `compute_attention_monotonicity()`: Kendall tau-like score [-1, 1]
+  - `monotonicity_border_adjustment()`: adapt border distance based on monotonicity
+    - Highly monotonic (>0.7) -> tighten border (bd-1) for lower latency
+    - Mildly non-monotonic (0-0.3) -> widen border (bd+1) for safety
+    - Strongly negative -> max widening (bd+2) for reordering/hallucination
+  - Integrated into `check_border_combined()` (adjusts effective_bd before all checks)
+  - Position history tracked per generation loop, reset per translate()/retranslate()
+  - `--attention-monotonicity` CLI flag, `mono=0,1` sweep shortname
+  - Minimal overhead: one float append per generation step
+- [x] **Signal architecture**: both signals integrated into existing `check_border_combined()` framework
+  - Coverage: early guard (step 0b) -- force stop on hallucination
+  - Monotonicity: border adjustment (step 0c) -- dynamic bd per generation context
+  - `use_combined` condition extended with `coverage_threshold is not None or attention_monotonicity`
+- [x] 495 unit tests (54 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -226,6 +256,9 @@
   - Compare endpoint for side-by-side backend comparison
 - [ ] MCP server for editor integration
 - [ ] LoRA adapter loading + discovery
+- [ ] **SimulStream integration** (CRITICAL for IWSLT 2026 submission): Wrap NLLW backend as SimulStream `SpeechProcessor`. Subclass `SpeechProcessor`, implement `process_chunk()` and `end_of_stream()`. See github.com/hlt-mt/simulstream.
+- [ ] **OmniSTEval integration**: Verify `omnisteval.py` output is compatible with latest OmniSTEval `longform` mode + XCOMET-XL scoring.
+- [ ] **Docker packaging**: Dockerfile for H100 80GB submission (Q8_0 7B GGUF = ~8GB VRAM)
 
 ## TODO -- Experiments to Run
 
@@ -270,6 +303,14 @@
 - [ ] **REINA + LSG combined**: `python -m nllw.bench --entropy-change -0.5 --lsg-kl 7.0 --lang en-zh --comet --save`
 - [ ] **Full iteration 9 sweep**: `python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1 shiftk=0.4" --lang en-zh --comet --save`
 - [ ] **All cross-step signals**: `python -m nllw.bench --entropy-change -0.5 --prediction-stability --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save`
+- [ ] **Source coverage sweep**: `python -m nllw.bench --sweep "cov=0.2,0.3,0.4,0.5" --lang en-zh --comet --save`
+- [ ] **Coverage + shift-k**: `python -m nllw.bench --coverage-threshold 0.3 --shift-k 0.4 --lang en-zh --comet --save`
+- [ ] **Coverage + LSG**: `python -m nllw.bench --coverage-threshold 0.3 --lsg-kl 7.0 --lang en-zh --comet --save`
+- [ ] **Attention monotonicity test**: `python -m nllw.bench --attention-monotonicity --lang en-zh --comet --save`
+- [ ] **Monotonicity + coverage combined**: `python -m nllw.bench --attention-monotonicity --coverage-threshold 0.3 --lang en-zh --comet --save`
+- [ ] **Full iteration 10 sweep**: `python -m nllw.bench --sweep "cov=0.3 mono=0,1 shiftk=0.4" --lang en-zh --comet --save`
+- [ ] **All signals combined (iterations 7-10)**: `python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --lang en-zh --comet --save`
+- [ ] **Coverage per direction**: `python -m nllw.bench --sweep "cov=0.2,0.3,0.4" --lang en-zh,en-de,en-it,cs-en --comet --save` -- coverage threshold may need per-language tuning
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
@@ -285,6 +326,8 @@
 - [x] **Attention entropy as dynamic border distance** (IMPLEMENTED): `--dynamic-border` flag. **Needs GPU testing.**
 - [x] **Gaussian kernel consensus** (IMPLEMENTED): 2 variants with sigma parameter. **Needs GPU testing.**
 - [x] **LA two-pass catch-up** (IMPLEMENTED): `--two-pass` flag. 2x compute for stability. **Needs GPU testing.**
+- [x] **Source coverage guard** (IMPLEMENTED, iteration 10): `--coverage-threshold 0.3`. Hallucination prevention via attention coverage. **Needs GPU testing.**
+- [x] **Attention monotonicity** (IMPLEMENTED, iteration 10): `--attention-monotonicity`. Dynamic border adjustment via attention movement patterns. **Needs GPU testing.**
 - [ ] **Aggregation sweep on GPU**: Run full 9-method sweep
 - [ ] **SSBD sweep on GPU**: `ssbd=0.0,0.1,0.2,0.3` x `adaptive=0,1`
 - [ ] **SSBD + mask-k sweep**: `ssbd=0.0,0.2 mask=0,1,2,3`

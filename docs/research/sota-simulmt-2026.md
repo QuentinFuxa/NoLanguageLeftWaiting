@@ -1,6 +1,6 @@
 # SOTA SimulMT Research (2025-2026)
 
-Research compiled 2026-03-20, updated with March 2026 findings.
+Research compiled 2026-03-20, updated with March 2026 findings (iteration 10 update).
 
 ---
 
@@ -236,11 +236,63 @@ Could complement AlignAtt but doubles compute per step.
 - MAB planner for dynamic speculative length selection per batch
 - **Action**: Decide whether to use SSBD at all per sentence
 
+### NEW (Iteration 10 Survey) -- Key Validation
+
+**Research gap confirmed (March 2026)**: No new training-free attention-based border
+detection methods found beyond what NLLW already implements. AlignAtt remains SOTA
+for training-free border detection with decoder-only LLMs. The field is moving toward
+end-to-end trained models (Hikari, Hibiki-Zero) or RL-optimized policies rather than
+training-free attention-based approaches.
+
+**Publication opportunity**: No one has published attention head detection/selection
+for decoder-only LLMs applied to SimulMT border detection (our detect_heads.py).
+This is novel and could be a paper contribution.
+
+**Our implementations are validated by top venues:**
+- LSG logit KL (2501.00868) -> AAAI 2026
+- SSBD (2509.21740) -> updated Jan 2026
+- REINA entropy change (2508.04946) -> AAAI 2026 Oral
+
 ### IWSLT 2026 Update
 - **Baselines repo**: github.com/owaski/iwslt-2026-baselines
   - Qwen3-ASR-1.7B + Qwen3-4B-Instruct-2507
   - New "Extra Context" subtrack (paper context improves quality)
 - **Two latency regimes**: Low and High (explicit thresholds TBD)
+- **Evaluation period**: April 1-15, 2026 (approaching!)
+- **EN->IT replaces EN->JP** for 2026 (we have corpus + head configs ready)
+- **CUNI won IWSLT 2025** using AlignAtt + EuroLLM with LocalAgreement
+  - Beat organizer baseline by 2-22 BLEU across directions
+  - Code: github.com/ufal/SimulStreaming
+  - CUNI could NOT use AlignAtt with EuroLLM (no attention extraction in CTranslate2)
+  - They only used AlignAtt for CS->EN (direct Whisper), LA for cascade EN->X
+  - **Our key advantage**: llama.cpp attention extraction lets us use AlignAtt with ANY model
+
+### CUNI IWSLT 2025 Detailed Results
+| Direction | BLEU | SLAAL | vs Baseline |
+|-----------|------|-------|-------------|
+| CS->EN (low) | 18.49 | 2000ms | +3.3 |
+| CS->EN (high) | 18.83 | 4000ms | +2.2 |
+| EN->DE (cascade) | 38.46-39.84 | 2472-3934ms | +13 |
+| EN->ZH (cascade) | 46.44-49.91 | 3698-5449ms | +22 |
+| EN->JP (cascade) | 34.69 | 4654ms | +18 |
+
+### IWSLT 2026 Baseline Configuration
+- Qwen3-ASR-1.7B + Qwen3-4B-Instruct-2507 (general-purpose, NOT translation-specific)
+- Local Agreement policy, speech_chunk_size 640-1280ms
+- repetition_penalty 1.05, temperature 0.0 (greedy)
+- NER context injection from paper PDFs (for Extra Context subtrack)
+- SimulStream for inference, OmniSTEval for evaluation
+
+### Competition Integration Requirements
+- **SimulStream**: WebSocket server, subclass `SpeechProcessor`, implement `process_chunk()`
+- **OmniSTEval**: `omnisteval longform --comet --comet_model Unbabel/XCOMET-XL`
+- **Docker on H100 80GB**: Q8_0 7B GGUF = ~8GB, plenty of room for KV cache
+
+### Strategic Position
+1. **HY-MT + AlignAtt is unexplored in competition** -- CUNI used EuroLLM + LA
+2. **Our baseline is much stronger**: HY-MT 0.842 XCOMET-XL vs Qwen3-4B (general-purpose)
+3. **AlignAtt with llama.cpp attention extraction** is unique capability -- no one else has this
+4. **Need SimulStream integration** for Docker submission (TODO)
 
 ---
 
