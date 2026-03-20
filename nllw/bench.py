@@ -30,6 +30,10 @@ from .eval import load_flores, evaluate_backend, EvalResult
 from .corpus import get_corpus_as_pairs
 from .backend_protocol import BackendConfig, create_backend
 
+# Import backends to register them with the factory
+import nllw.alignatt_backend  # noqa: F401 -- registers alignatt, full-sentence, eager
+import nllw.baselines  # noqa: F401 -- registers wait-k, fixed-rate
+
 
 def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
     """Parse a sweep specification string.
@@ -99,6 +103,8 @@ def run_benchmark(args):
         context_sentences=args.context_sentences,
         target_lang=tgt_lang,
         n_ctx=args.n_ctx,
+        wait_k=args.wait_k,
+        entropy_veto_threshold=args.entropy_threshold,
     )
 
     backend = create_backend(config)
@@ -228,6 +234,9 @@ def main():
     parser.add_argument("--word-batch", type=int, default=3)
     parser.add_argument("--context-sentences", type=int, default=0)
     parser.add_argument("--n-ctx", type=int, default=2048)
+    parser.add_argument("--wait-k", type=int, default=5, help="Wait-k words (for wait-k backend)")
+    parser.add_argument("--entropy-threshold", type=float, default=None,
+                        help="Entropy veto threshold (None=disabled)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")
@@ -258,6 +267,13 @@ def main():
                 f, indent=2, ensure_ascii=False,
             )
         print(f"Saved to {output_path}", file=sys.stderr)
+
+    # OmniSTEval export
+    if args.omnisteval and len(results) == 1 and results[0].per_sentence:
+        from .omnisteval import eval_result_to_omnisteval, write_jsonl_file
+        eval_dict = {"per_sentence": results[0].per_sentence}
+        entries = eval_result_to_omnisteval(eval_dict, talk_id_prefix=args.lang)
+        write_jsonl_file(entries, args.omnisteval)
 
 
 if __name__ == "__main__":

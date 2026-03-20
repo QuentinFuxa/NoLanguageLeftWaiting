@@ -41,6 +41,8 @@ class BackendConfig:
     use_kvcache: bool = True
     # Entropy veto
     entropy_veto_threshold: Optional[float] = None
+    # Wait-k policy
+    wait_k: int = 5
     # Target language (for output validation)
     target_lang: str = "zh"
 

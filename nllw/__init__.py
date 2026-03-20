@@ -36,3 +36,6 @@ __all__ = [
     "list_all_language_code_codes",
     "LANGUAGES",
 ]
+
+# SimulMT modules (lazy-loaded to avoid requiring llama.cpp for basic usage)
+# Import these directly: from nllw.alignatt import ..., from nllw.detect_heads import ..., etc.
