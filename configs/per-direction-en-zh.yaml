@@ -1,0 +1,14 @@
+# Per-direction optimization: EN -> ZH
+# Best known: bd=3 wb=2 (XCOMET-XL 0.842 from iwslt26-sst)
+#
+# Run on A40:
+#   python -m nllw.bench --suite corpus --lang en-zh --comet \
+#     --sweep "bd=2,3,4 wb=1,2,3" --save
+
+backend_type: alignatt
+lang_pair: en-zh
+corpus_name: corpus
+border_distance: 3
+word_batch: 2
+context_window: 0
+prompt_format: hymt

@@ -1,0 +1,1295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NLLW</title>
+<style>
+  :root {
+    --bg:          #0a0a0a;
+    --bg-surface:  #111111;
+    --bg-elevated: #1a1a1a;
+    --bg-input:    #141414;
+    --border:      #222222;
+    --border-focus:#444444;
+    --text:        #e5e5e5;
+    --text-dim:    #666666;
+    --text-muted:  #444444;
+    --accent:      #e5e5e5;
+    --green:       #4ade80;
+    --green-dim:   #1a3a2a;
+    --orange:      #f59e0b;
+    --orange-dim:  #3a2a0a;
+    --red:         #ef4444;
+    --red-dim:     #3a1a1a;
+    --blue:        #60a5fa;
+    --radius:      8px;
+    --radius-lg:   12px;
+    --font:        -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono:   "SF Mono", "Fira Code", "JetBrains Mono", "Cascadia Code", monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    height: 100%;
+    overflow: hidden;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.6;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ======== Top bar ======== */
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+    z-index: 10;
+  }
+
+  .topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  .topbar-brand {
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+    color: var(--text);
+  }
+
+  .topbar-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    transition: background 0.3s;
+  }
+  .dot.active { background: var(--green); }
+  .dot.error  { background: var(--red); }
+
+  .topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .topbar-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 6px 12px;
+    border-radius: var(--radius);
+    font-family: var(--font);
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .topbar-btn:hover {
+    color: var(--text);
+    border-color: var(--border-focus);
+    background: var(--bg-elevated);
+  }
+  .topbar-btn.active {
+    color: var(--text);
+    background: var(--bg-elevated);
+    border-color: var(--border-focus);
+  }
+
+  /* ======== Main layout ======== */
+  .main-layout {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ======== Sidebar ======== */
+  .sidebar {
+    width: 320px;
+    border-right: 1px solid var(--border);
+    background: var(--bg-surface);
+    overflow-y: auto;
+    flex-shrink: 0;
+    transition: margin-left 0.25s ease, opacity 0.2s ease;
+  }
+  .sidebar.collapsed {
+    margin-left: -320px;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .sidebar-section {
+    padding: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+    margin-bottom: 14px;
+  }
+
+  .field {
+    margin-bottom: 14px;
+  }
+  .field:last-child {
+    margin-bottom: 0;
+  }
+
+  .field-label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 5px;
+  }
+
+  .field-input {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    font-family: var(--font);
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  .field-input:focus {
+    border-color: var(--border-focus);
+  }
+  .field-input::placeholder {
+    color: var(--text-muted);
+  }
+
+  .field-select {
+    width: 100%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    font-family: var(--font);
+    font-size: 13px;
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23666' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+    transition: border-color 0.15s;
+  }
+  .field-select:focus {
+    border-color: var(--border-focus);
+  }
+
+  .lang-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  /* Slider */
+  .slider-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+  }
+  .slider-label {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .slider-value {
+    font-size: 12px;
+    color: var(--text);
+    font-family: var(--font-mono);
+    min-width: 24px;
+    text-align: right;
+  }
+
+  input[type="range"] {
+    width: 100%;
+    height: 4px;
+    appearance: none;
+    background: var(--border);
+    border-radius: 2px;
+    outline: none;
+    margin-bottom: 14px;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--text);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  input[type="range"]::-webkit-slider-thumb:hover {
+    background: #fff;
+  }
+
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .toggle-label {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .toggle {
+    position: relative;
+    width: 36px;
+    height: 20px;
+    cursor: pointer;
+  }
+  .toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+  }
+  .toggle-track {
+    position: absolute;
+    inset: 0;
+    background: var(--border);
+    border-radius: 10px;
+    transition: background 0.2s;
+  }
+  .toggle input:checked + .toggle-track {
+    background: var(--green);
+  }
+  .toggle-knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: var(--text);
+    border-radius: 50%;
+    transition: transform 0.2s;
+  }
+  .toggle input:checked ~ .toggle-knob {
+    transform: translateX(16px);
+  }
+
+  /* Action buttons */
+  .sidebar-actions {
+    display: flex;
+    gap: 8px;
+    padding: 20px;
+  }
+
+  .action-btn {
+    flex: 1;
+    padding: 9px 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-input);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-align: center;
+  }
+  .action-btn:hover {
+    background: var(--bg-elevated);
+    border-color: var(--border-focus);
+  }
+  .action-btn.primary {
+    background: var(--text);
+    color: var(--bg);
+    border-color: var(--text);
+  }
+  .action-btn.primary:hover {
+    background: #fff;
+  }
+  .action-btn.primary:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .action-btn.danger {
+    color: var(--red);
+    border-color: var(--red-dim);
+  }
+  .action-btn.danger:hover {
+    background: var(--red-dim);
+    border-color: var(--red);
+  }
+
+  /* ======== Chat area ======== */
+  .chat-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .chat-scroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 32px 0;
+  }
+
+  .chat-container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  /* Empty state */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 40px;
+  }
+  .empty-state-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+  }
+  .empty-state-title {
+    font-size: 18px;
+    font-weight: 500;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+  .empty-state-subtitle {
+    font-size: 14px;
+    color: var(--text-muted);
+  }
+
+  /* Chat turns */
+  .turn {
+    margin-bottom: 28px;
+    animation: fadeIn 0.2s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .turn-source {
+    margin-bottom: 8px;
+  }
+  .turn-tag {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+  }
+  .turn-tag.source-tag {
+    color: var(--text-dim);
+  }
+  .turn-tag.translation-tag {
+    color: var(--green);
+  }
+
+  .turn-source-text {
+    font-size: 15px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .turn-translation {
+    font-size: 17px;
+    line-height: 1.7;
+    color: var(--text);
+  }
+
+  .committed {
+    color: var(--text);
+  }
+
+  .buffer-text {
+    color: var(--text-dim);
+    font-style: italic;
+  }
+
+  /* Live turn has a subtle left border */
+  .turn.live {
+    padding-left: 16px;
+    border-left: 2px solid var(--border-focus);
+  }
+
+  /* ======== Input bar ======== */
+  .input-bar {
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    padding: 16px 24px 20px;
+    flex-shrink: 0;
+  }
+
+  .input-container {
+    max-width: 720px;
+    margin: 0 auto;
+    position: relative;
+  }
+
+  .input-main {
+    width: 100%;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 14px 60px 14px 18px;
+    border-radius: var(--radius-lg);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.5;
+    outline: none;
+    transition: border-color 0.15s;
+    resize: none;
+  }
+  .input-main:focus {
+    border-color: var(--border-focus);
+  }
+  .input-main::placeholder {
+    color: var(--text-muted);
+  }
+  .input-main:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+
+  .input-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    text-align: center;
+  }
+
+  .finish-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    width: 36px;
+    height: 36px;
+    border-radius: var(--radius);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+  }
+  .finish-btn:hover {
+    color: var(--text);
+    border-color: var(--border-focus);
+    background: var(--bg-elevated);
+  }
+  .finish-btn svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* ======== Metrics bar ======== */
+  .metrics-bar {
+    display: flex;
+    gap: 24px;
+    justify-content: center;
+    padding: 8px 24px;
+    border-top: 1px solid var(--border);
+    background: var(--bg);
+    flex-shrink: 0;
+    transition: max-height 0.2s ease, opacity 0.2s ease, padding 0.2s ease;
+    overflow: hidden;
+  }
+  .metrics-bar.collapsed {
+    max-height: 0;
+    padding: 0 24px;
+    opacity: 0;
+    border-top-color: transparent;
+  }
+
+  .metric {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+  }
+  .metric-label {
+    color: var(--text-muted);
+  }
+  .metric-value {
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+  }
+
+  /* ======== Debug panel ======== */
+  .debug-panel {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+    border-top: 1px solid transparent;
+    background: var(--bg-surface);
+  }
+  .debug-panel.open {
+    max-height: 250px;
+    border-top-color: var(--border);
+  }
+  .debug-inner {
+    padding: 12px 24px;
+    overflow-y: auto;
+    max-height: 236px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .debug-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 24px;
+    border-bottom: 1px solid var(--border);
+  }
+  .debug-header span {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-dim);
+  }
+  .debug-clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 6px;
+  }
+  .debug-clear-btn:hover {
+    color: var(--text-dim);
+  }
+
+  .log-entry {
+    padding: 1px 0;
+    color: var(--text-dim);
+  }
+  .log-ts {
+    color: var(--text-muted);
+  }
+  .log-info  { color: var(--text-dim); }
+  .log-error { color: var(--red); }
+  .log-stable { color: var(--green); }
+  .log-buffer { color: var(--orange); font-style: italic; }
+  .log-input  { color: var(--text-muted); }
+
+  /* ======== Scrollbar ======== */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 3px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--border-focus);
+  }
+
+  /* ======== Responsive ======== */
+  @media (max-width: 768px) {
+    .sidebar {
+      position: absolute;
+      left: 0;
+      top: 49px;
+      bottom: 0;
+      z-index: 20;
+      box-shadow: 4px 0 20px rgba(0,0,0,0.5);
+    }
+    .sidebar.collapsed {
+      margin-left: -320px;
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- ======== Top bar ======== -->
+<div class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-brand">nllw</span>
+    <div class="topbar-status">
+      <span class="dot" id="status-dot"></span>
+      <span id="status-text">not connected</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <button class="topbar-btn" id="btn-metrics" onclick="toggleMetrics()">metrics</button>
+    <button class="topbar-btn" id="btn-debug" onclick="toggleDebug()">debug</button>
+    <button class="topbar-btn active" id="btn-sidebar" onclick="toggleSidebar()">settings</button>
+  </div>
+</div>
+
+<!-- ======== Main layout ======== -->
+<div class="main-layout">
+
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Backend</div>
+      <div class="field">
+        <label class="field-label">Type</label>
+        <select class="field-select" id="backend-type">
+          <option value="alignatt" selected>alignatt</option>
+          <option value="alignatt-la">alignatt-la</option>
+          <option value="alignatt-kv">alignatt-kv</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="field-label">Model path</label>
+        <input type="text" class="field-input" id="model-path" placeholder="HYMT_MODEL_PATH env var">
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Languages</div>
+      <div class="lang-row">
+        <div class="field">
+          <label class="field-label">Source</label>
+          <select class="field-select" id="source-lang">
+            <option value="en" selected>English</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="es">Spanish</option>
+            <option value="it">Italian</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="ru">Russian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ar">Arabic</option>
+            <option value="nl">Dutch</option>
+            <option value="pl">Polish</option>
+            <option value="tr">Turkish</option>
+            <option value="vi">Vietnamese</option>
+            <option value="th">Thai</option>
+            <option value="hi">Hindi</option>
+            <option value="sv">Swedish</option>
+            <option value="da">Danish</option>
+            <option value="fi">Finnish</option>
+            <option value="el">Greek</option>
+            <option value="uk">Ukrainian</option>
+            <option value="cs">Czech</option>
+            <option value="ro">Romanian</option>
+            <option value="hu">Hungarian</option>
+          </select>
+        </div>
+        <div class="field">
+          <label class="field-label">Target</label>
+          <select class="field-select" id="target-lang">
+            <option value="fr" selected>French</option>
+            <option value="en">English</option>
+            <option value="de">German</option>
+            <option value="es">Spanish</option>
+            <option value="it">Italian</option>
+            <option value="zh">Chinese</option>
+            <option value="ja">Japanese</option>
+            <option value="ko">Korean</option>
+            <option value="ru">Russian</option>
+            <option value="pt">Portuguese</option>
+            <option value="ar">Arabic</option>
+            <option value="nl">Dutch</option>
+            <option value="pl">Polish</option>
+            <option value="tr">Turkish</option>
+            <option value="vi">Vietnamese</option>
+            <option value="th">Thai</option>
+            <option value="hi">Hindi</option>
+            <option value="sv">Swedish</option>
+            <option value="da">Danish</option>
+            <option value="fi">Finnish</option>
+            <option value="el">Greek</option>
+            <option value="uk">Ukrainian</option>
+            <option value="cs">Czech</option>
+            <option value="ro">Romanian</option>
+            <option value="hu">Hungarian</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-title">Parameters</div>
+
+      <div class="slider-row">
+        <span class="slider-label">border_distance</span>
+        <span class="slider-value" id="val-border">3</span>
+      </div>
+      <input type="range" id="slider-border" min="1" max="5" value="3" step="1"
+             oninput="document.getElementById('val-border').textContent=this.value">
+
+      <div class="slider-row">
+        <span class="slider-label">word_batch</span>
+        <span class="slider-value" id="val-batch">3</span>
+      </div>
+      <input type="range" id="slider-batch" min="1" max="5" value="3" step="1"
+             oninput="document.getElementById('val-batch').textContent=this.value">
+
+      <div class="toggle-row">
+        <span class="toggle-label">entropy_veto</span>
+        <label class="toggle" id="toggle-entropy-wrap">
+          <input type="checkbox" id="toggle-entropy" onchange="updateEntropySlider()">
+          <span class="toggle-track"></span>
+          <span class="toggle-knob"></span>
+        </label>
+      </div>
+
+      <div id="entropy-slider-group" style="display:none;">
+        <div class="slider-row">
+          <span class="slider-label">threshold</span>
+          <span class="slider-value" id="val-entropy">0.5</span>
+        </div>
+        <input type="range" id="slider-entropy" min="0" max="1" value="0.5" step="0.05"
+               oninput="document.getElementById('val-entropy').textContent=parseFloat(this.value).toFixed(2)">
+      </div>
+    </div>
+
+    <div class="sidebar-actions">
+      <button class="action-btn primary" id="btn-load" onclick="loadModel()">Load</button>
+      <button class="action-btn" id="btn-finish-side" onclick="finishTranslation()">Finish</button>
+      <button class="action-btn danger" id="btn-reset" onclick="resetTranslation()">Reset</button>
+    </div>
+  </aside>
+
+  <!-- Chat area -->
+  <div class="chat-area">
+    <div class="chat-scroll" id="chat-scroll">
+      <div class="chat-container" id="chat-container">
+        <div class="empty-state" id="empty-state">
+          <div class="empty-state-icon">&#9674;</div>
+          <div class="empty-state-title">NLLW Debug Console</div>
+          <div class="empty-state-subtitle">Load a model and start typing to translate</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input bar -->
+    <div class="input-bar">
+      <div class="input-container">
+        <input type="text" class="input-main" id="source-input"
+               placeholder="Type source text... translates on space"
+               autocomplete="off" spellcheck="false" disabled>
+        <button class="finish-btn" id="btn-finish-inline" onclick="finishTranslation()" title="Finish translation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 10 4 15 9 20"></polyline>
+            <path d="M20 4v7a4 4 0 0 1-4 4H4"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="input-hint">press space to translate incrementally</div>
+    </div>
+
+    <!-- Metrics bar (collapsible) -->
+    <div class="metrics-bar collapsed" id="metrics-bar">
+      <div class="metric">
+        <span class="metric-label">committed</span>
+        <span class="metric-value" id="m-committed">0 tok</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">source words</span>
+        <span class="metric-value" id="m-source-words">0</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">ratio</span>
+        <span class="metric-value" id="m-ratio">--</span>
+      </div>
+      <div class="metric">
+        <span class="metric-label">time/word</span>
+        <span class="metric-value" id="m-time">--</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Debug panel -->
+<div class="debug-panel" id="debug-panel">
+  <div class="debug-header">
+    <span>Debug log</span>
+    <button class="debug-clear-btn" onclick="clearDebugLog()">clear</button>
+  </div>
+  <div class="debug-inner" id="debug-log"></div>
+</div>
+
+<script>
+// ================================================================
+// State
+// ================================================================
+let lastSentPos = 0;
+let committedTranslation = "";
+let currentBuffer = "";
+let isLoaded = false;
+let isLoading = false;
+let statusInterval = null;
+let turns = [];  // Array of {source, committed, buffer, finished}
+let totalTranslateMs = 0;
+let translateCalls = 0;
+
+const API = "";
+
+// ================================================================
+// DOM refs
+// ================================================================
+const sourceInput    = document.getElementById("source-input");
+const chatContainer  = document.getElementById("chat-container");
+const chatScroll     = document.getElementById("chat-scroll");
+const emptyState     = document.getElementById("empty-state");
+const debugLog       = document.getElementById("debug-log");
+const statusDot      = document.getElementById("status-dot");
+const statusText     = document.getElementById("status-text");
+const sidebar        = document.getElementById("sidebar");
+const debugPanel     = document.getElementById("debug-panel");
+const metricsBar     = document.getElementById("metrics-bar");
+
+// ================================================================
+// API helpers
+// ================================================================
+async function apiPost(endpoint, body = {}) {
+  const resp = await fetch(API + endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return resp.json();
+}
+
+async function apiGet(endpoint) {
+  const resp = await fetch(API + endpoint);
+  return resp.json();
+}
+
+// ================================================================
+// UI toggles
+// ================================================================
+function toggleSidebar() {
+  sidebar.classList.toggle("collapsed");
+  document.getElementById("btn-sidebar").classList.toggle("active");
+}
+
+function toggleDebug() {
+  debugPanel.classList.toggle("open");
+  document.getElementById("btn-debug").classList.toggle("active");
+}
+
+function toggleMetrics() {
+  metricsBar.classList.toggle("collapsed");
+  document.getElementById("btn-metrics").classList.toggle("active");
+}
+
+function updateEntropySlider() {
+  const on = document.getElementById("toggle-entropy").checked;
+  document.getElementById("entropy-slider-group").style.display = on ? "block" : "none";
+}
+
+// ================================================================
+// Load model
+// ================================================================
+async function loadModel() {
+  if (isLoading) return;
+  isLoading = true;
+
+  const btn = document.getElementById("btn-load");
+  btn.textContent = "Loading...";
+  btn.disabled = true;
+
+  const modelPath    = document.getElementById("model-path").value.trim() || null;
+  const targetLang   = document.getElementById("target-lang").value;
+  const sourceLang   = document.getElementById("source-lang").value;
+  const backendType  = document.getElementById("backend-type").value;
+  const borderDist   = parseInt(document.getElementById("slider-border").value);
+  const wordBatch    = parseInt(document.getElementById("slider-batch").value);
+  const entropyOn    = document.getElementById("toggle-entropy").checked;
+  const entropyVal   = entropyOn ? parseFloat(document.getElementById("slider-entropy").value) : null;
+
+  logInfo("Loading " + backendType + " | " + sourceLang + " -> " + targetLang + (modelPath ? " | " + modelPath : ""));
+
+  try {
+    const result = await apiPost("/load", {
+      model_path: modelPath,
+      target_lang: targetLang,
+      source_lang: sourceLang,
+      backend_type: backendType,
+      border_distance: borderDist,
+      word_batch: wordBatch,
+      entropy_veto_threshold: entropyVal,
+    });
+
+    if (result.ok === false || result.error) {
+      logError("Load failed: " + (result.error || "unknown error"));
+    } else {
+      logInfo("Model loaded");
+      isLoaded = true;
+      sourceInput.disabled = false;
+      sourceInput.focus();
+      resetLocalState();
+    }
+  } catch (e) {
+    logError("Load request failed: " + e.message);
+  }
+
+  btn.textContent = "Load";
+  btn.disabled = false;
+  isLoading = false;
+}
+
+// ================================================================
+// Translate
+// ================================================================
+async function translateChunk(text) {
+  if (!isLoaded) {
+    logError("Model not loaded");
+    return;
+  }
+
+  // Ensure we have a live turn
+  if (turns.length === 0 || turns[turns.length - 1].finished) {
+    turns.push({ source: "", committed: "", buffer: "", finished: false });
+  }
+
+  const turn = turns[turns.length - 1];
+  turn.source += text;
+
+  const t0 = performance.now();
+
+  try {
+    const result = await apiPost("/translate", { text: text });
+
+    const elapsed = performance.now() - t0;
+    totalTranslateMs += elapsed;
+    translateCalls++;
+
+    if (result.error) {
+      logError("Translate: " + result.error);
+      return;
+    }
+
+    const stable = result.stable || "";
+    const buffer = result.buffer || "";
+
+    if (stable.trim()) {
+      turn.committed += (turn.committed ? " " : "") + stable.trim();
+      committedTranslation = turn.committed;
+    }
+    turn.buffer = buffer;
+    currentBuffer = buffer;
+
+    renderChat();
+    updateMetrics(result);
+    logTranslate(text, stable, buffer, elapsed);
+  } catch (e) {
+    logError("Translate failed: " + e.message);
+  }
+}
+
+// ================================================================
+// Finish
+// ================================================================
+async function finishTranslation() {
+  if (!isLoaded) return;
+
+  try {
+    const result = await apiPost("/finish");
+
+    if (result.error) {
+      logError("Finish: " + result.error);
+      return;
+    }
+
+    const remaining = result.remaining || "";
+
+    if (turns.length > 0) {
+      const turn = turns[turns.length - 1];
+      if (remaining.trim()) {
+        turn.committed += (turn.committed ? " " : "") + remaining.trim();
+      }
+      turn.buffer = "";
+      turn.finished = true;
+    }
+
+    committedTranslation = "";
+    currentBuffer = "";
+
+    renderChat();
+    logInfo("Finish: " + (result.full_translation || "(empty)"));
+  } catch (e) {
+    logError("Finish failed: " + e.message);
+  }
+}
+
+// ================================================================
+// Reset
+// ================================================================
+async function resetTranslation() {
+  try {
+    await apiPost("/reset");
+    resetLocalState();
+    logInfo("State reset");
+  } catch (e) {
+    logError("Reset failed: " + e.message);
+  }
+}
+
+function resetLocalState() {
+  lastSentPos = 0;
+  committedTranslation = "";
+  currentBuffer = "";
+  sourceInput.value = "";
+  turns = [];
+  totalTranslateMs = 0;
+  translateCalls = 0;
+  renderChat();
+}
+
+// ================================================================
+// Render chat
+// ================================================================
+function renderChat() {
+  // Clear container except empty state
+  chatContainer.innerHTML = "";
+
+  if (turns.length === 0) {
+    chatContainer.appendChild(createEmptyState());
+    return;
+  }
+
+  turns.forEach((turn, i) => {
+    const el = document.createElement("div");
+    el.className = "turn" + ((!turn.finished && i === turns.length - 1) ? " live" : "");
+
+    // Source
+    const srcDiv = document.createElement("div");
+    srcDiv.className = "turn-source";
+    const srcTag = document.createElement("div");
+    srcTag.className = "turn-tag source-tag";
+    srcTag.textContent = "source";
+    const srcText = document.createElement("div");
+    srcText.className = "turn-source-text";
+    srcText.textContent = turn.source.trim();
+    srcDiv.appendChild(srcTag);
+    srcDiv.appendChild(srcText);
+    el.appendChild(srcDiv);
+
+    // Translation
+    const transDiv = document.createElement("div");
+    const transTag = document.createElement("div");
+    transTag.className = "turn-tag translation-tag";
+    transTag.textContent = "translation";
+    transDiv.appendChild(transTag);
+
+    const transText = document.createElement("div");
+    transText.className = "turn-translation";
+
+    if (turn.committed) {
+      const cs = document.createElement("span");
+      cs.className = "committed";
+      cs.textContent = turn.committed;
+      transText.appendChild(cs);
+    }
+    if (turn.buffer) {
+      const bs = document.createElement("span");
+      bs.className = "buffer-text";
+      bs.textContent = (turn.committed ? " " : "") + turn.buffer;
+      transText.appendChild(bs);
+    }
+    if (!turn.committed && !turn.buffer) {
+      const ws = document.createElement("span");
+      ws.className = "buffer-text";
+      ws.textContent = "waiting...";
+      transText.appendChild(ws);
+    }
+
+    transDiv.appendChild(transText);
+    el.appendChild(transDiv);
+
+    chatContainer.appendChild(el);
+  });
+
+  // Scroll to bottom
+  chatScroll.scrollTop = chatScroll.scrollHeight;
+}
+
+function createEmptyState() {
+  const div = document.createElement("div");
+  div.className = "empty-state";
+  div.id = "empty-state";
+  div.innerHTML =
+    '<div class="empty-state-icon">&#9674;</div>' +
+    '<div class="empty-state-title">NLLW Debug Console</div>' +
+    '<div class="empty-state-subtitle">Load a model and start typing to translate</div>';
+  return div;
+}
+
+// ================================================================
+// Input handler: auto-translate on space
+// ================================================================
+sourceInput.addEventListener("input", () => {
+  const text = sourceInput.value;
+  if (text.length > 0 && text[text.length - 1] === " ") {
+    const newText = text.substring(lastSentPos);
+    if (newText.trim()) {
+      lastSentPos = text.length;
+      translateChunk(newText);
+    }
+  }
+});
+
+// Enter to finish
+sourceInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    // Send remaining text if any
+    const text = sourceInput.value;
+    const newText = text.substring(lastSentPos);
+    if (newText.trim()) {
+      lastSentPos = text.length;
+      translateChunk(newText);
+    }
+    // Then finish
+    setTimeout(() => finishTranslation(), 100);
+    // Start new turn
+    setTimeout(() => {
+      sourceInput.value = "";
+      lastSentPos = 0;
+    }, 200);
+  }
+});
+
+// ================================================================
+// Metrics
+// ================================================================
+function updateMetrics(result) {
+  const tokens = result.committed_tokens || 0;
+  const words = result.source_words ? result.source_words.length : 0;
+  const avgMs = translateCalls > 0 ? (totalTranslateMs / translateCalls) : 0;
+  const ratio = words > 0 ? (tokens / words).toFixed(2) : "--";
+
+  document.getElementById("m-committed").textContent = tokens + " tok";
+  document.getElementById("m-source-words").textContent = words;
+  document.getElementById("m-ratio").textContent = ratio;
+  document.getElementById("m-time").textContent = avgMs > 0 ? avgMs.toFixed(0) + " ms" : "--";
+}
+
+// ================================================================
+// Status polling
+// ================================================================
+async function pollStatus() {
+  try {
+    const s = await apiGet("/status");
+    const loaded = s.loaded || false;
+    isLoaded = loaded;
+
+    statusDot.className = "dot" + (loaded ? " active" : "");
+
+    if (loaded) {
+      const src = s.source_lang || "?";
+      const tgt = s.target_lang || "?";
+      statusText.textContent = src + " \u2192 " + tgt;
+      sourceInput.disabled = false;
+    } else {
+      statusText.textContent = "not loaded";
+    }
+  } catch (e) {
+    statusDot.className = "dot error";
+    statusText.textContent = "disconnected";
+  }
+}
+
+// ================================================================
+// Debug logging
+// ================================================================
+function ts() {
+  const d = new Date();
+  return d.toLocaleTimeString("en-GB", { hour12: false }) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+function logTranslate(input, stable, buffer, elapsedMs) {
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML =
+    '<span class="log-ts">' + ts() + '</span> ' +
+    '<span class="log-input">"' + esc(input.trim()) + '"</span> ' +
+    '\u2192 <span class="log-stable">"' + esc(stable) + '"</span> ' +
+    '<span class="log-buffer">"' + esc(buffer) + '"</span> ' +
+    '<span class="log-ts">' + elapsedMs.toFixed(0) + 'ms</span>';
+  debugLog.appendChild(entry);
+  scrollDebug();
+}
+
+function logInfo(msg) {
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML = '<span class="log-ts">' + ts() + '</span> <span class="log-info">' + esc(msg) + '</span>';
+  debugLog.appendChild(entry);
+  scrollDebug();
+}
+
+function logError(msg) {
+  const entry = document.createElement("div");
+  entry.className = "log-entry";
+  entry.innerHTML = '<span class="log-ts">' + ts() + '</span> <span class="log-error">' + esc(msg) + '</span>';
+  debugLog.appendChild(entry);
+  scrollDebug();
+}
+
+function clearDebugLog() {
+  debugLog.innerHTML = "";
+}
+
+function scrollDebug() {
+  const inner = document.querySelector(".debug-inner");
+  inner.scrollTop = inner.scrollHeight;
+}
+
+function esc(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// ================================================================
+// Init
+// ================================================================
+pollStatus();
+statusInterval = setInterval(pollStatus, 3000);
+</script>
+</body>
+</html>

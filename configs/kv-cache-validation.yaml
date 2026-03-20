@@ -1,0 +1,16 @@
+# KV cache backend validation
+# P2: Verify alignatt-kv produces identical output to alignatt
+#
+# Run on A40:
+#   python -m nllw.bench --suite corpus --lang en-fr --comet \
+#     --compare alignatt alignatt-kv --bd 3 --wb 3 --save
+#
+# Expected: identical BLEU/COMET, but alignatt-kv should be 3-5x faster (lower ms/word)
+
+backend_type: alignatt-kv
+lang_pair: en-fr
+corpus_name: corpus
+border_distance: 3
+word_batch: 3
+context_window: 0
+prompt_format: hymt

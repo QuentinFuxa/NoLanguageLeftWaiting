@@ -1,0 +1,23 @@
+# AlignAtt vs LocalAgreement head-to-head comparison
+# P0: NEVER tested before. The 2025 IWSLT winner uses LocalAgreement.
+#
+# Run on A40:
+#   python -m nllw.bench --suite corpus --lang en-fr --comet \
+#     --compare alignatt alignatt-la --bd 3 --wb 3 --save
+#
+# For each language direction:
+#   python -m nllw.bench --suite corpus --lang en-zh --comet \
+#     --compare alignatt alignatt-la --bd 3 --wb 2 --save
+#   python -m nllw.bench --suite corpus --lang en-de --comet \
+#     --compare alignatt alignatt-la --bd 3 --wb 2 --save
+#   python -m nllw.bench --suite corpus --lang en-it --comet \
+#     --compare alignatt alignatt-la --bd 4 --wb 3 --save
+
+# Single config for experiment.py (one at a time):
+backend_type: alignatt
+lang_pair: en-fr
+corpus_name: corpus
+border_distance: 3
+word_batch: 3
+context_window: 0
+prompt_format: hymt

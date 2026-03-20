@@ -1,0 +1,16 @@
+{
+    "model": "HY-MT1.5-7B",
+    "note": "Universal heads - L7H21 dominant across all tested directions (EN-ZH/DE/IT/FR, CS-EN)",
+    "token_alignment_heads": [
+        {"layer": 7, "head": 21, "ts": 0.737},
+        {"layer": 7, "head": 20, "ts": 0.672},
+        {"layer": 14, "head": 19, "ts": 0.654},
+        {"layer": 4, "head": 25, "ts": 0.653},
+        {"layer": 6, "head": 19, "ts": 0.652},
+        {"layer": 5, "head": 10, "ts": 0.620},
+        {"layer": 10, "head": 2, "ts": 0.610},
+        {"layer": 3, "head": 8, "ts": 0.590},
+        {"layer": 8, "head": 15, "ts": 0.580},
+        {"layer": 12, "head": 7, "ts": 0.570}
+    ]
+}

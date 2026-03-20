@@ -46,7 +46,40 @@ class TranslationModel:
         return self.tokenizer[input_lang]
 
 
-def load_model(src_langs, nllb_backend: str = 'transformers', nllb_size: str = '600M'):
+def load_model(src_langs, nllb_backend: str = 'transformers', nllb_size: str = '600M',
+               model_path: str = None):
+    """Load a translation model.
+
+    Args:
+        src_langs: List of source language identifiers.
+        nllb_backend: Backend to use ('transformers', 'ctranslate2', or 'alignatt').
+        nllb_size: NLLB model size (ignored for alignatt).
+        model_path: Path to GGUF model file (required for alignatt, ignored for others).
+
+    Returns:
+        TranslationModel for NLLB backends. For 'alignatt', returns a
+        TranslationModel with backend_type='alignatt' and model_path stored
+        in model_name (the actual backend is created by AlignAttBackend).
+    """
+    if nllb_backend == 'alignatt':
+        if model_path is None:
+            import os
+            model_path = os.environ.get("HYMT_MODEL_PATH")
+        if model_path is None:
+            raise ValueError(
+                "AlignAtt backend requires model_path or HYMT_MODEL_PATH env var.\n"
+                "Download: huggingface-cli download tencent/HY-MT1.5-7B-GGUF "
+                "HY-MT1.5-7B-Q8_0.gguf --local-dir ."
+            )
+        return TranslationModel(
+            translator=None,
+            device="metal",
+            tokenizer={},
+            backend_type="alignatt",
+            nllb_size="",
+            model_name=model_path,
+        )
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model_name = f"facebook/nllb-200-distilled-{nllb_size}"
 
@@ -56,7 +89,7 @@ def load_model(src_langs, nllb_backend: str = 'transformers', nllb_size: str = '
         if nllb_code is None:
             raise ValueError(f"Unknown language identifier: {lang}")
         converted_src_langs.append(nllb_code)
-    
+
     if nllb_backend == 'ctranslate2':
         if not CTRANSLATE2_AVAILABLE:
             raise ImportError("ctranslate2 is not installed. Install it with: pip install ctranslate2")
@@ -71,7 +104,7 @@ def load_model(src_langs, nllb_backend: str = 'transformers', nllb_size: str = '
     elif nllb_backend == 'transformers':
         translator = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
     else:
-        raise ValueError(f"Unknown backend: {nllb_backend}. Use 'transformers' or 'ctranslate2'")
+        raise ValueError(f"Unknown backend: {nllb_backend}. Use 'transformers', 'ctranslate2', or 'alignatt'")
 
     tokenizer = {}
     for src_lang in converted_src_langs:

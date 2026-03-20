@@ -1,0 +1,17 @@
+# Entropy veto threshold tuning
+# P2: Test 0.70, 0.75, 0.80 on the full corpus with COMET
+#
+# Run on A40:
+#   python -m nllw.bench --suite corpus --lang en-fr --comet \
+#     --sweep "ev=0.70,0.75,0.80" --bd 3 --wb 3 --save
+#
+# Also test without entropy veto (baseline) separately:
+#   python -m nllw.bench --suite corpus --lang en-fr --comet --bd 3 --wb 3 --save
+
+backend_type: alignatt
+lang_pair: en-fr
+corpus_name: corpus
+border_distance: 3
+word_batch: 3
+entropy_veto_threshold: 0.75
+prompt_format: hymt

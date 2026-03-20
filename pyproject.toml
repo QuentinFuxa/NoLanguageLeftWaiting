@@ -16,6 +16,8 @@ keywords = [
     "machine-translation",
     "simultaneous-translation",
     "nllb",
+    "alignatt",
+    "llama-cpp",
     "streaming",
     "nlp",
     "transformers",
@@ -37,19 +39,30 @@ classifiers = [
 ]
 
 dependencies = [
-    "torch>=1.10.0",
-    "transformers>=4.30.0",
+    "numpy",
 ]
 
 [project.optional-dependencies]
+nllb = [
+    "torch>=1.10.0",
+    "transformers>=4.30.0",
+]
 ctranslate2 = [
+    "torch>=1.10.0",
+    "transformers>=4.30.0",
     "ctranslate2>=3.16.0",
+]
+comet = [
+    "unbabel-comet>=2.2.0",
 ]
 demo = [
     "textual>=0.40.0",
     "bertviz>=1.4.1",
     "transformers>4.57"
 ]
+
+[project.scripts]
+nllw-tui = "textual_interface:main"
 
 [project.urls]
 Homepage = "https://github.com/QuentinFuxa/NoLanguageLeftWaiting"
@@ -58,4 +71,4 @@ Homepage = "https://github.com/QuentinFuxa/NoLanguageLeftWaiting"
 packages = ["nllw"]
 
 [tool.setuptools.package-data]
-nllw = ["py.typed"]
+nllw = ["py.typed", "heads/*.json"]

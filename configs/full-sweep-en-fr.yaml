@@ -1,0 +1,17 @@
+# Full parameter sweep for EN -> FR
+# Comprehensive sweep for finding the Pareto frontier
+#
+# Run on A40 (will take a while - 36 configs):
+#   python -m nllw.bench --suite corpus --lang en-fr --comet \
+#     --sweep "bd=1,2,3,4,5,6 wb=1,2,3,4,5,6" --save
+#
+# Quick sweep (9 configs):
+#   python -m nllw.bench --suite corpus --lang en-fr --comet \
+#     --sweep "bd=2,3,4 wb=2,3,4" --save
+
+backend_type: alignatt
+lang_pair: en-fr
+corpus_name: corpus
+border_distance: 3
+word_batch: 3
+prompt_format: hymt

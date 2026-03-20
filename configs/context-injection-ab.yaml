@@ -1,0 +1,15 @@
+# Context injection A/B test
+# P1: Test context_window=0 vs 3 vs 5 on discourse-dependent pairs
+# Known: HY-MT context hurts (-0.028), Qwen3.5 helps (+0.037)
+#
+# Run on A40:
+#   python -m nllw.bench --suite corpus --lang en-fr --comet \
+#     --sweep "ctx=0,3,5" --bd 3 --wb 3 --save
+
+backend_type: alignatt
+lang_pair: en-fr
+corpus_name: corpus
+border_distance: 3
+word_batch: 3
+context_window: 0
+prompt_format: hymt
