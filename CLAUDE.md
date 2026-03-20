@@ -128,43 +128,45 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~15,300 lines across 21 modules
+### What exists now: ~5,400 lines across 16 SimulMT modules, 115 tests
 
-**6 translation backends:**
+**5 translation backends (registered):**
 | Backend | Type | File | Purpose |
 |---------|------|------|---------|
-| `alignatt` | Primary | `nllw/alignatt_backend.py` (856 lines) | Attention-based border detection + entropy veto + context injection |
-| `alignatt-la` | Quality | `nllw/alignatt_la_backend.py` (468 lines) | LocalAgreement hybrid (re-translate + diff for stability) |
-| `alignatt-kv` | Speed | `nllw/alignatt_kvcache_backend.py` (697 lines) | KV cache delta decoding (5-10x faster) |
-| `wait-k` | Baseline | `nllw/baselines.py` (654 lines) | Standard wait-k policy baseline |
-| `full-sentence` | Baseline | `nllw/baselines.py` | Quality upper bound (offline) |
-| `eager` | Baseline | `nllw/baselines.py` | Latency lower bound |
+| `alignatt` | Primary | `nllw/alignatt_backend.py` (462 lines) | Attention-based border detection + entropy veto + KV cache reuse |
+| `wait-k` | Baseline | `nllw/baselines.py` (175 lines) | Standard wait-k policy baseline |
+| `fixed-rate` | Baseline | `nllw/baselines.py` | Fixed-interval emission |
+| `full-sentence` | Baseline | `nllw/alignatt_backend.py` | Quality upper bound (offline) |
+| `eager` | Baseline | `nllw/alignatt_backend.py` | Latency lower bound |
 
-**6 prompt formats:** hymt, qwen3, qwen3.5, qwen3-nothink, eurollm, custom
+**30+ prompt formats:** hymt, qwen3, qwen3.5, qwen3.5-nothink, eurollm, tower, gemma (per-direction)
 
 **11 research tools:**
 | Module | Lines | Purpose |
 |--------|-------|---------|
-| `eval.py` | 1006 | BLEU/COMET/xCOMET-XL evaluation, parameter sweep |
-| `research.py` | 1026 | Compute-aware latency (CA-AL), benchmark suite |
-| `simulate.py` | 539 | Policy replay, Average Lagging computation |
-| `corpus.py` | 1614 | 130-sentence categorized test corpus |
-| `experiment.py` | 1227 | Experiment config/result registry, Pareto analysis |
-| `analysis.py` | 1405 | Pareto frontier, edge cases, report generation |
-| `detect_heads.py` | 1030 | Auto alignment head detection for any GGUF model |
-| `metrics.py` | 320 | BLEU, COMET, xCOMET-XL wrappers |
-| `lora.py` | 164 | LoRA adapter loading + discovery |
-| `bench.py` | ~440 | Unified one-command benchmarking CLI with sweep, compare, OmniSTEval |
-| `omnisteval.py` | ~300 | OmniSTEval JSONL output format for IWSLT submission |
+| `eval.py` | 410 | BLEU/COMET/xCOMET-XL evaluation, parameter sweep |
+| `simulate.py` | 135 | Policy replay, Average Lagging computation |
+| `corpus.py` | 622 | 120-sentence categorized test corpus (5 directions) |
+| `experiment.py` | 359 | Experiment YAML config/result registry |
+| `analysis.py` | 309 | Pareto frontier, edge cases, report generation |
+| `detect_heads.py` | 559 | Auto alignment head detection for any GGUF model |
+| `metrics.py` | 257 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics |
+| `bench.py` | 264 | Unified one-command benchmarking CLI with sweep, compare |
+| `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
+| `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
+| `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
+| `alignatt.py` | 201 | Core border detection algorithm |
 
 **Infrastructure:**
-- `backend_protocol.py` — SimulMTBackend ABC + `create_backend()` factory
-- `llama_backend.py` — ctypes wrapper for custom llama.cpp with attention extraction API
-- 23 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
-- 9 experiment configs in `configs/` (alignatt-vs-la, per-direction, entropy, context, kv-cache, sweep)
-- Web debug: FastAPI server + Ollama-style UI + MCP server
-- LoRA C API bindings (load/apply/clear adapters)
+- `backend_protocol.py` (139 lines) -- SimulMTBackend ABC + `create_backend()` factory
+- `llama_backend.py` (541 lines) -- ctypes wrapper for custom llama.cpp with attention extraction API
+- 22 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
 - Context injection (rolling buffer of previous translations)
+
+**Not yet built (planned):**
+- `alignatt_la_backend.py` -- LocalAgreement hybrid (re-translate + diff)
+- `lora.py` -- LoRA adapter loading
+- Web debug: FastAPI server + MCP server
 
 ### Key parameters and their optimal values
 | Parameter | Default | Notes |

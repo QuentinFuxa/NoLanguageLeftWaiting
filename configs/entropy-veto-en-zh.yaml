@@ -1,0 +1,22 @@
+# Entropy veto threshold tuning for EN-ZH
+# Tests whether entropy-based stopping improves quality
+name: entropy-veto-en-zh
+backend:
+  type: alignatt
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Sweep entropy_veto_threshold={0.5, 0.75, 1.0, 1.5, None}.
+  Previous finding: 0.75 recommended. Catches uncertain tokens.
+  Run with: python -m nllw.bench --sweep "entropy=0.5,0.75,1.0,1.5" --lang en-zh --comet
+tags:
+  - entropy
+  - en-zh
+  - tuning
