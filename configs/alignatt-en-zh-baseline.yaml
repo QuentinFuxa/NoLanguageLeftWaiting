@@ -1,0 +1,23 @@
+# AlignAtt baseline for EN-ZH with HY-MT1.5-7B
+# Expected: XCOMET-XL ~0.842 (best known from iwslt26-sst)
+name: alignatt-en-zh-baseline
+backend:
+  type: alignatt
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 2
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 100
+  suite: flores
+  comet: true
+  xcomet: false
+notes: >
+  Baseline AlignAtt on EN-ZH. HY-MT champion config from iwslt26-sst.
+  bd=3, wb=2, no context (context hurts HY-MT by -0.028).
+tags:
+  - baseline
+  - en-zh
+  - hymt

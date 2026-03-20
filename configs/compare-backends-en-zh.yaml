@@ -1,0 +1,19 @@
+# Backend comparison: AlignAtt vs wait-k vs full-sentence on EN-ZH
+# Tests quality-latency tradeoff of different policies
+name: compare-backends-en-zh
+backend:
+  type: alignatt
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Compare AlignAtt, wait-k, and full-sentence backends.
+  Run with: python -m nllw.bench --compare alignatt wait-k full-sentence --lang en-zh --comet
+tags:
+  - comparison
+  - en-zh
