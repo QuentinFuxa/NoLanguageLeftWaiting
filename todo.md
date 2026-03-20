@@ -85,6 +85,38 @@
   - Sweep: `adaptive=0,1`
 - [x] 244 unit tests (41 new, all passing)
 
+## DONE -- Iteration 6: Two-Pass, AMS, Temp Norm, Head Transfer
+
+- [x] **LA Two-Pass Catch-up** (`la_two_pass` config, `--two-pass` CLI):
+  - Run two independent re-translations per source update
+  - Keep the one with the longer common prefix with previous output (more stable)
+  - Pass 2 uses standard re-translation even if SSBD/forced was used for pass 1 (diversity)
+  - Trades 2x compute for better output stability (lower NE)
+  - Sweep: `twopass=0,1`
+- [x] **Adaptive Multi-Strategy (AMS)** (`adaptive_aggregation` config, `--adaptive-agg` CLI):
+  - Auto-select aggregation method per token based on attention patterns
+  - Analyzes head agreement ratio + attention entropy to pick method:
+    - High agreement + low entropy -> ts_vote
+    - High agreement + high entropy -> entropy_weighted
+    - Low agreement + low entropy -> geomean
+    - Low agreement + high entropy -> consensus
+  - Novel: no published work on per-token aggregation selection
+  - Sweep: `ams=0,1`
+- [x] **Per-head temperature normalization** (`head_temp_normalize` config, `--head-temp-norm` CLI):
+  - Normalize attention sharpness per head before aggregation
+  - Binary search for temperature that matches reference entropy
+  - Ensures fair weighting: sharp heads don't dominate due to peaky distributions
+  - Sweep: `tempnorm=0,1 tempref=1.0,1.5,2.0`
+- [x] **Cross-lingual head transfer analysis** (`nllw/head_transfer.py`, `python -m nllw.head_transfer`):
+  - Validates whether heads detected for one language pair work for another
+  - Metrics: Jaccard similarity, top-K overlap, TS rank correlation, transferred TS mass
+  - **Key finding**: EuroLLM heads are EXCELLENT (98.9% TS mass transfer, min 97.3%)
+  - **Key finding**: HY-MT1.8B heads are EXCELLENT (98.4% TS mass transfer)
+  - **Key finding**: Qwen3.5 heads are EXCELLENT (97.8% TS mass transfer)
+  - **Key finding**: Qwen3-4B heads are GOOD but weaker (79.8% mean, 43.5% worst-case en-it->en-zh)
+  - Confirms ICLR 2026 "Translation Heads" paper: most models have universal alignment heads
+- [x] 290 unit tests (46 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -111,6 +143,11 @@
 - [ ] **Gaussian kernel sigma sweep**: `python -m nllw.bench --sweep "agg=gaussian_kernel" --lang en-zh --comet` (vary sigma via config)
 - [ ] **Forced decoding test**: `python -m nllw.bench --backend alignatt-la --forced-decode --lang en-zh --comet --save` -- speed & quality vs standard LA
 - [ ] **Adaptive SSBD sweep**: `python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --adaptive-ssbd --lang en-zh --comet --save` vs fixed beta
+- [ ] **Two-pass stability test**: `python -m nllw.bench --backend alignatt-la --two-pass --lang en-zh --comet --save` -- compare NE with and without
+- [ ] **AMS aggregation test**: `python -m nllw.bench --adaptive-agg --lang en-zh --comet --save` vs fixed ts_vote
+- [ ] **Head temp normalization test**: `python -m nllw.bench --head-temp-norm --lang en-zh --comet --save` vs unnormalized
+- [ ] **Combined AMS + temp norm**: `python -m nllw.bench --adaptive-agg --head-temp-norm --lang en-zh --comet --save`
+- [ ] **Full iteration 6 sweep**: `python -m nllw.bench --sweep "ams=0,1 tempnorm=0,1 twopass=0,1" --backend alignatt-la --lang en-zh --comet --save`
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
@@ -122,23 +159,31 @@
 - [x] **Adaptive SSBD beta** (IMPLEMENTED): `--adaptive-ssbd` flag. Per-token entropy-based bias. **Needs GPU testing.**
 - [x] **Attention entropy as dynamic border distance** (IMPLEMENTED): `--dynamic-border` flag. **Needs GPU testing.**
 - [x] **Gaussian kernel consensus** (IMPLEMENTED): 2 variants with sigma parameter. **Needs GPU testing.**
-- [ ] **LA two-pass catch-up**: Run two re-translations per update (CUNI approach) for extra LA comparison
+- [x] **LA two-pass catch-up** (IMPLEMENTED): `--two-pass` flag. 2x compute for stability. **Needs GPU testing.**
 - [ ] **Aggregation sweep on GPU**: Run full 9-method sweep
 - [ ] **SSBD sweep on GPU**: `ssbd=0.0,0.1,0.2,0.3` x `adaptive=0,1`
 - [ ] **SSBD + mask-k sweep**: `ssbd=0.0,0.2 mask=0,1,2,3`
 
 ### Medium Priority (validated by SOTA papers)
-- [ ] Cross-lingual transfer of alignment heads (ICLR 2026 "Translation Heads" paper confirms heads are universal)
+- [x] **Cross-lingual head transfer** (IMPLEMENTED): `python -m nllw.head_transfer --all`. **Results: EuroLLM/HY-MT/Qwen3.5 excellent (>97%), Qwen3-4B good (80%).**
 - [x] **LocalAgreement + AlignAtt hybrid** (IMPLEMENTED): `alignatt-la` backend. **Needs GPU testing.**
 - [ ] ExPosST-style position slot reservation (arxiv 2603.14903) for zero-recomputation KV cache
 - [ ] Dynamic word_batch based on source complexity (short sentences -> smaller wb)
-- [ ] **Adaptive Multi-Strategy (AMS)**: Auto-select aggregation based on input (entropy, agreement ratio)
-- [ ] **Per-head temperature normalization**: Learned during head detection, normalizes sharpness
+- [x] **Adaptive Multi-Strategy (AMS)** (IMPLEMENTED): `--adaptive-agg` flag. Per-token aggregation selection. **Needs GPU testing.**
+- [x] **Per-head temperature normalization** (IMPLEMENTED): `--head-temp-norm` flag. Binary search temperature. **Needs GPU testing.**
 
 ### Medium-High Priority (new from March 2026 SOTA survey)
 - [ ] **GRPO fine-tuning** (SeqPO-SiMT, arxiv 2505.20622): RL-optimize READ/WRITE decisions using BLEU/COMET reward. SimulMT results on 7B LLM rival offline translation.
 - [ ] **Syntax-aware chunking** (SASST, arxiv 2508.07781): Replace fixed word_batch with dependency-aware boundaries. Qwen3-8B: +1.2-3.2 BLEU.
 - [ ] **SSD parallel speculation** (arxiv 2603.03251): Extend SSBD to predict verification outcomes and pre-compute multiple draft continuations. Up to 2x over standard spec dec.
+
+### NEW High Priority (Iteration 6 SOTA survey, see docs/research/sota-simulmt-2026.md)
+- [ ] **Group Position Encoding** (arxiv 2505.16983, ACL 2025): Separate position IDs for source/target. No retraining. Code: github.com/EIT-NLP/StreamingLLM. Implementable in llama.cpp position ID manipulation.
+- [ ] **REINA information gain policy** (arxiv 2508.04946, AAAI 2026 Oral): Principled entropy-based READ/WRITE. Extends our entropy_veto_threshold with info-theoretic grounding. 21% latency/quality improvement.
+- [ ] **AliBaStr-MT learned border** (arxiv 2503.22051, Apple): Train 6M-param classifier on our TS alignment data. Tunable delta threshold at inference. Replaces heuristic border_distance.
+- [ ] **DrFrattn attention-based policy** (EMNLP 2025): Closest published work to our AlignAtt. "Shift-k" mechanism for adaptive thresholds -- must read.
+- [ ] **StreamingThinker parallel KV** (arxiv 2510.17238, ICLR 2026): Parallel KV caches decouple source encoding from generation. 80% pre-reasoning latency reduction.
+- [ ] **RL-optimized SSBD** (arxiv 2603.01639, ICLR 2026): RL-optimize SSBD beta per-context instead of fixed 0.2. 2.24-4.32x speedup.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025, github.com/eit-nlp/streamingllm) as alternative to our KV cache approach
@@ -148,6 +193,11 @@
 - [ ] **LSG KL-divergence policy** (arxiv 2501.00868): Training-free, uses KL(P_partial || P_full) for read/write decisions.
 - [ ] **Confidence-modulated speculative decoding** (arxiv 2508.15371): Dynamically adjust draft length based on entropy/margin uncertainty.
 - [ ] **SimulSA 1% activation** (arxiv 2509.15692): Minimal SimulMT examples needed to activate streaming capabilities when fine-tuning.
+- [ ] **SimulMask SFT** (arxiv 2405.10443, EMNLP 2024): Modify attention mask during LoRA fine-tuning to enforce SimulMT policy. Simpler than EAST.
+- [ ] **DPO segmentation** (arxiv 2510.12195): DPO-tune LLM to predict optimal chunk boundaries. Replace fixed word_batch.
+- [ ] **RASST retrieval** (arxiv 2601.22777): Retrieval-augmented SimulMT for IWSLT 2026 "Extra Context" subtrack. +3 BLEU, +16% terminology.
+- [ ] **PEARL pre-verify** (arxiv 2408.11850, ICLR 2025): Pre-verify first draft token during drafting phase. Extend SSBD pipeline.
+- [ ] **Nightjar MAB** (arxiv 2512.22420): Multi-armed bandit to decide whether to use SSBD at all per sentence.
 
 ---
 
