@@ -283,6 +283,96 @@ def aggregate_top_p(
 # Aggregation registry
 # ---------------------------------------------------------------------------
 
+def aggregate_gaussian_kernel(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    sigma: float = 1.5,
+) -> float:
+    """Gaussian kernel consensus: smooth density over attended positions.
+
+    Novel aggregation that unifies ts_vote (sigma->0) and softmax_mean
+    (sigma->inf) with a single bandwidth parameter:
+        1. Each head votes for its argmax position
+        2. Each vote is a Gaussian kernel centered at that position
+        3. The kernels are weighted by TS scores
+        4. Return the position with maximum density
+
+    With small sigma, this approaches argmax voting (ts_vote).
+    With large sigma, the density becomes uniform (like mean position).
+    Intermediate sigma captures partial agreement: nearby heads reinforce
+    each other, distant heads cancel out.
+
+    Advantage over ts_vote: subword boundary tolerance (heads attending
+    to adjacent subwords contribute to the same region).
+    Advantage over softmax_mean: still produces a clear peak (not washed
+    out by diffuse attention).
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+        sigma: Kernel bandwidth. Recommended range: 0.5-3.0.
+            0.5 = nearly argmax. 1.5 = moderate smoothing. 3.0 = wide blur.
+
+    Returns:
+        Position with maximum kernel density (float, can be fractional)
+    """
+    n_heads, n_src = src_attn.shape
+    if n_src == 0:
+        return 0.0
+
+    head_argmaxes = np.argmax(src_attn, axis=1)
+    positions = np.arange(n_src, dtype=np.float64)
+
+    # Build kernel density: sum of TS-weighted Gaussians centered at each head's argmax
+    density = np.zeros(n_src, dtype=np.float64)
+    for h in range(n_heads):
+        center = float(head_argmaxes[h])
+        # Gaussian kernel: exp(-0.5 * ((x - center) / sigma)^2)
+        kernel = np.exp(-0.5 * ((positions - center) / sigma) ** 2)
+        density += ts_scores[h] * kernel
+
+    return float(np.argmax(density))
+
+
+def aggregate_gaussian_kernel_continuous(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    sigma: float = 1.5,
+) -> float:
+    """Like gaussian_kernel but uses full attention distributions, not just argmax.
+
+    Instead of placing a Gaussian at each head's argmax, we convolve each
+    head's full attention distribution with a Gaussian kernel, then take
+    the TS-weighted sum. This preserves multi-modal attention patterns.
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+        sigma: Kernel bandwidth
+
+    Returns:
+        Position with maximum smoothed density (float)
+    """
+    n_heads, n_src = src_attn.shape
+    if n_src == 0:
+        return 0.0
+
+    positions = np.arange(n_src, dtype=np.float64)
+
+    # Build Gaussian kernel matrix: K[i,j] = exp(-0.5 * ((i-j)/sigma)^2)
+    diff = positions[:, np.newaxis] - positions[np.newaxis, :]
+    kernel_matrix = np.exp(-0.5 * (diff / sigma) ** 2)
+
+    # Convolve each head's attention with the kernel, weight by TS
+    smoothed = np.zeros(n_src, dtype=np.float64)
+    for h in range(n_heads):
+        # attn[h] @ kernel_matrix = smoothed distribution for head h
+        head_smoothed = src_attn[h] @ kernel_matrix
+        smoothed += ts_scores[h] * head_smoothed
+
+    return float(np.argmax(smoothed))
+
+
 def aggregate_ensemble(
     src_attn: np.ndarray,
     ts_scores: List[float],
@@ -335,6 +425,8 @@ _BASE_AGGREGATION_METHODS = {
     "consensus": aggregate_consensus,
     "geomean": aggregate_geomean,
     "top_p": aggregate_top_p,
+    "gaussian_kernel": aggregate_gaussian_kernel,
+    "gaussian_kernel_continuous": aggregate_gaussian_kernel_continuous,
 }
 
 _AGGREGATION_METHODS = {

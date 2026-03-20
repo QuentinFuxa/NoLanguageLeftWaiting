@@ -126,29 +126,76 @@ Could complement AlignAtt but doubles compute per step.
 
 ---
 
+## New Papers (March 2026 Update)
+
+### Hibiki-Zero -- GRPO RL for SimulMT (arxiv 2602.11072, Feb 2026)
+- Kyutai Labs, 3B model using **Group Relative Policy Optimization** RL
+- BLEU-based reward to learn efficient translation policy
+- SOTA on 5 X-to-English tasks; surpasses Seamless in speaker similarity by 30+ pts
+- **Relevance**: GRPO could fine-tune our LLM for better READ/WRITE decisions, complementing AlignAtt
+
+### SimulU -- Training-Free Long-Form Policy (arxiv 2603.16924, Mar 2026)
+- Uses cross-attention in pre-trained E2E models to regulate input/output
+- Better tradeoff than cascaded models on MuST-C across 8 languages
+- **Relevance**: Low for text-based, but history management approach could improve context
+
+### EASiST -- Lightweight Policy Head (arxiv 2504.11809, Apr 2025)
+- Lightweight head predicts READ/WRITE based on semantics (simpler than full attention)
+- Superior on MuST-C EN-DE, EN-ES
+- **Relevance**: A small learned policy head could be faster than AlignAtt attention analysis
+
+### SimulSA -- 1% Data Activates SimulMT (arxiv 2509.15692, Sep 2025)
+- Only 1% simultaneous data added to SFT activates SimulMT capabilities
+- **Relevance**: If we fine-tune HY-MT, very few SimulMT examples needed
+
+### SASST -- Syntax-Aware Chunking (arxiv 2508.07781, Aug 2025)
+- Dependency-relation-based chunking (noun phrases, verb-object structures)
+- Qwen3-8B outperforms LLaMA3-8B by 1.2-3.2 BLEU
+- **Relevance**: Could replace fixed word_batch with syntax-aware boundaries
+
+### Speculative Decoding Advances (ICLR 2026)
+- **SSD** (arxiv 2603.03251): Draft predicts verification outcomes in parallel. Up to 2x over standard spec dec.
+- **Mirror** (arxiv 2510.13161): Bidirectional speculation. 2.8-5.8x speedup on 14-66B models.
+- **ConFu** (arxiv 2603.08899): "Contemplate tokens" expose reasoning signals for drafting. 8-11% over EAGLE-3.
+
+### Seed LiveInterpret 2.0 (ByteDance, early 2026)
+- Production ZH-EN/EN-ZH system: >70% accuracy, 2-3s latency
+- Zero-shot voice cloning, full-duplex
+- Sets commercial viability benchmark
+
+### IWSLT 2026 Update
+- **Baselines repo**: github.com/owaski/iwslt-2026-baselines
+  - Qwen3-ASR-1.7B + Qwen3-4B-Instruct-2507
+  - New "Extra Context" subtrack (paper context improves quality)
+- **Two latency regimes**: Low and High (explicit thresholds TBD)
+
+---
+
 ## Research Opportunities for NLLW
 
-### Open gaps (no published work):
-1. **Alternative attention aggregation** for AlignAtt -- our 7 methods are novel (DONE in Iteration 3)
-2. **AlignAtt + speculative generation** combination (DONE: SSBD in Iteration 4)
-3. **AlignAtt + human-like strategies** (SENTENCE_CUT, DROP)
-4. **Adaptive SSBD beta**: Use per-token entropy to adjust bias (novel combination)
-5. **Display-only mask-k**: Keep unstable suffix as draft, hide from user
-
-### Implemented:
+### Implemented (Iterations 1-5):
 1. ~~SSBD for accelerating alignatt-la re-translation~~ DONE (Iteration 4)
 2. ~~Attention entropy as dynamic border distance~~ DONE (Iteration 3)
 3. ~~NE (Normalized Erasure) metric~~ DONE (Iteration 4)
+4. ~~Adaptive SSBD beta (entropy-based per-token bias)~~ DONE (Iteration 5)
+5. ~~Gaussian kernel consensus aggregation~~ DONE (Iteration 5)
+6. ~~LA forced decoding (CUNI approach)~~ DONE (Iteration 5)
+7. ~~Display-only mask-k~~ DONE (Iteration 4)
 
-### To investigate:
-1. **Cross-lingual head transfer** -- do EN-ZH heads work for EN-DE?
-2. **LSG KL-divergence** as complement to attention-based borders
-3. **Confidence-modulated speculative decoding** (arxiv 2508.15371) for adaptive draft length
+### High priority (to investigate):
+1. **ExPosST position slot reservation** -- eliminates KV recomputation entirely
+2. **Group Position Encoding** (ACL 2025) -- simpler alternative, code available
+3. **GRPO fine-tuning** (SeqPO-SiMT/Hibiki-Zero) -- RL-optimize READ/WRITE decisions
+4. **Syntax-aware chunking** (SASST) -- replace fixed word_batch with dependency-aware chunking
+5. **Cross-lingual head transfer** -- do EN-ZH heads work for EN-DE?
+6. **SSD parallel speculation** -- extend SSBD to pre-compute multiple draft continuations
+7. **Human-like strategies** (Sentence_Cut, Drop) -- aggressive latency reduction
 
 ### Our advantages:
 - AlignAtt validated by IWSLT 2025 winner (CUNI)
 - Translation Heads paper (ICLR 2026) validates our TS scoring
 - KV cache reuse already implemented (3-5x speedup)
-- SSBD implemented (expected 1.3-1.7x additional speedup)
-- 7 novel aggregation methods (no published baselines)
+- SSBD + adaptive beta implemented (expected 1.3-1.7x additional speedup)
+- 9 novel aggregation methods (no published baselines)
+- LA forced decoding for consistency (CUNI approach)
 - HY-MT1.5-7B: 0.842 XCOMET-XL EN-ZH (strong baseline)

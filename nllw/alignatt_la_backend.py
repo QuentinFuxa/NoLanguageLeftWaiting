@@ -100,6 +100,52 @@ def _longest_common_prefix_words(a: str, b: str) -> str:
     return " ".join(words_a[:common])
 
 
+def adaptive_ssbd_beta(
+    logits: np.ndarray,
+    base_beta: float,
+    low_entropy: float = 1.0,
+    high_entropy: float = 4.0,
+) -> float:
+    """Compute adaptive SSBD beta based on model entropy at this position.
+
+    Novel approach combining SSBD (Zeng et al., 2025) with entropy-modulated
+    confidence (inspired by arxiv 2508.15371).
+
+    When the model is confident (low entropy), we can be more lenient with
+    draft acceptance (higher beta). When uncertain (high entropy), we should
+    be stricter (lower beta) to avoid accepting wrong tokens.
+
+    Mapping:
+        entropy <= low_entropy  -> beta = base_beta * 1.5 (more lenient)
+        entropy >= high_entropy -> beta = base_beta * 0.2 (stricter)
+        between                 -> linear interpolation
+
+    Args:
+        logits: Raw logit array (n_vocab,)
+        base_beta: Base SSBD beta (e.g. 0.2)
+        low_entropy: Threshold for "confident" (default: 1.0 nats)
+        high_entropy: Threshold for "uncertain" (default: 4.0 nats)
+
+    Returns:
+        Adapted beta value
+    """
+    # Compute entropy
+    shifted = logits - np.max(logits)
+    exp_l = np.exp(shifted)
+    probs = exp_l / exp_l.sum()
+    ent = float(-np.sum(probs * np.log(probs + 1e-10)))
+
+    if ent <= low_entropy:
+        scale = 1.5  # confident -> more lenient
+    elif ent >= high_entropy:
+        scale = 0.2  # uncertain -> stricter
+    else:
+        ratio = (ent - low_entropy) / (high_entropy - low_entropy)
+        scale = 1.5 - 1.3 * ratio  # linear from 1.5 to 0.2
+
+    return min(0.95, base_beta * scale)  # cap at 0.95 to avoid degenerate case
+
+
 def ssbd_accept(logits: np.ndarray, draft_token: int, beta: float) -> bool:
     """Check if a draft token is accepted under biased speculative decoding.
 
@@ -286,11 +332,14 @@ class AlignAttLABackend(SimulMTBackend):
             )
 
     def _retranslate(self, is_final: bool) -> List[int]:
-        """Re-translate the full source from scratch using AlignAtt.
+        """Re-translate the full source using AlignAtt.
 
-        If SSBD is enabled and we have a previous translation, uses speculative
-        draft verification for 1.3-1.7x speedup. Otherwise falls back to
-        standard autoregressive generation.
+        Strategy selection:
+        1. SSBD: If enabled and we have a previous translation, uses speculative
+           draft verification for 1.3-1.7x speedup.
+        2. Forced decoding: If enabled and we have committed tokens, force-decode
+           the committed prefix then generate continuation only.
+        3. Standard: Full re-translation from scratch.
 
         Returns:
             Full list of generated token IDs (not just delta)
@@ -303,6 +352,16 @@ class AlignAttLABackend(SimulMTBackend):
 
         if use_ssbd:
             return self._retranslate_ssbd()
+
+        use_forced = (
+            self.config.la_forced_decode
+            and self._committed_ids
+            and not is_final
+        )
+
+        if use_forced:
+            return self._retranslate_forced()
+
         return self._retranslate_standard(is_final)
 
     def _retranslate_standard(self, is_final: bool) -> List[int]:
@@ -382,6 +441,100 @@ class AlignAttLABackend(SimulMTBackend):
 
         return gen_ids
 
+    def _retranslate_forced(self) -> List[int]:
+        """Re-translate with forced decoding of committed prefix.
+
+        CUNI approach (Polak et al., 2025): instead of generating the full
+        translation from scratch, force-decode the already-committed tokens
+        first, then generate only the continuation.
+
+        Benefits:
+        - Fewer tokens to generate autoregressively (faster)
+        - Model is conditioned on committed tokens (more consistent)
+        - KV cache contains committed prefix (better attention context)
+
+        Sequence decoded: source + suffix + committed_tokens (forced) -> generate new
+
+        Returns:
+            Full list of generated token IDs (committed + new generated)
+        """
+        accumulated_source = " ".join(self._source_words)
+        source_tokens = ll.tokenize(
+            self._vocab, accumulated_source, add_bos=False, special=False
+        )
+
+        prefix_len = len(self._prefix_tokens)
+
+        # Clear KV cache from prefix_len onwards (keep prompt prefix)
+        if not ll.memory_seq_rm(self._mem, 0, prefix_len, -1):
+            ll.memory_clear(self._mem)
+            if self._prefix_tokens:
+                ll.decode_batch_at(self._ctx, self._prefix_tokens, pos_start=0)
+
+        src_start = prefix_len
+        src_end = prefix_len + len(source_tokens)
+        num_src_tokens = src_end - src_start
+
+        # Decode: source + suffix + committed_tokens (forced) in one batch
+        forced_tokens = source_tokens + self._suffix_tokens + self._committed_ids
+        if forced_tokens:
+            ll.decode_batch_at(self._ctx, forced_tokens, pos_start=prefix_len)
+
+        pos = prefix_len + len(forced_tokens)
+
+        # Start with committed tokens as the base
+        gen_ids = list(self._committed_ids)
+
+        # Generate new tokens beyond the committed prefix
+        max_gen = self.config.max_new_per_step - len(gen_ids)
+
+        for step in range(max(0, max_gen)):
+            next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
+            if next_tok in self._stop_ids or next_tok < 0:
+                break
+
+            # Entropy veto
+            if self.config.entropy_veto_threshold is not None:
+                logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                if logits is not None:
+                    ent = compute_entropy(logits)
+                    if ent > self.config.entropy_veto_threshold:
+                        break
+
+            ll.decode_single_at(self._ctx, next_tok, pos, seq_id=0)
+            pos += 1
+
+            # Border detection
+            if num_src_tokens > 0:
+                ctx_size = ll.n_ctx(self._ctx)
+                attn = ll.get_attn_weights(
+                    self._ctx, 0, self._n_heads, ctx_size
+                )
+                if attn is not None and src_end <= attn.shape[1]:
+                    src_attn = attn[:, src_start:src_end]
+                    if self.config.dynamic_border:
+                        border_hit = check_border_dynamic(
+                            src_attn, self._ts_scores,
+                            num_src_tokens, self.config.border_distance,
+                            aggregation=self.config.aggregation,
+                        )
+                    else:
+                        border_hit = check_border(
+                            src_attn, self._ts_scores,
+                            num_src_tokens, self.config.border_distance,
+                            aggregation=self.config.aggregation,
+                        )
+                    if border_hit:
+                        gen_ids.append(next_tok)
+                        break
+
+            gen_ids.append(next_tok)
+
+        # Clean up generated tokens from KV cache
+        ll.memory_seq_rm(self._mem, 0, prefix_len, -1)
+
+        return gen_ids
+
     def _retranslate_ssbd(self) -> List[int]:
         """Re-translate using SSBD: verify previous translation as draft.
 
@@ -436,6 +589,7 @@ class AlignAttLABackend(SimulMTBackend):
 
         # Verify each draft token
         accepted = 0
+        use_adaptive = self.config.adaptive_ssbd and beta > 0.0
         for j in range(len(draft_tokens)):
             batch_idx = verify_start + j
             logits = ll.get_logits_array(self._ctx, batch_idx, self._nv)
@@ -446,7 +600,12 @@ class AlignAttLABackend(SimulMTBackend):
             if draft_tokens[j] in self._stop_ids:
                 break
 
-            if ssbd_accept(logits, draft_tokens[j], beta):
+            # Adaptive beta: scale per-token based on model entropy
+            effective_beta = (
+                adaptive_ssbd_beta(logits, beta) if use_adaptive else beta
+            )
+
+            if ssbd_accept(logits, draft_tokens[j], effective_beta):
                 accepted += 1
             else:
                 break

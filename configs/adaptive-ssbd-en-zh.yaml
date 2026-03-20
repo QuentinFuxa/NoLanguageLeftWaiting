@@ -1,0 +1,35 @@
+# Adaptive SSBD beta: entropy-modulated speculative decoding
+# Combines SSBD (arxiv 2509.21740) + confidence modulation (arxiv 2508.15371)
+name: adaptive-ssbd-en-zh
+backend:
+  type: alignatt-la
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  ssbd_beta: 0.2
+  adaptive_ssbd: true
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Compare fixed vs adaptive SSBD beta on EN-ZH.
+
+  Run with:
+  # Fixed beta (baseline)
+  python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --lang en-zh --comet --save
+  # Adaptive beta
+  python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --adaptive-ssbd --lang en-zh --comet --save
+
+  Expected: adaptive should maintain acceptance rate on confident tokens
+  while being stricter on uncertain ones. Net effect: similar speedup,
+  potentially better quality on uncertain tokens.
+
+  Also test with different base betas:
+  python -m nllw.bench --backend alignatt-la --sweep "ssbd=0.1,0.2,0.3" --adaptive-ssbd --lang en-zh --comet --save
+tags:
+  - ssbd
+  - adaptive
+  - novel
+  - en-zh
