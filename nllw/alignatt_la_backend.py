@@ -39,7 +39,9 @@ from . import llama_backend as ll
 from .alignatt import (
     aggregate_ts_weighted_vote,
     check_border,
+    check_border_combined,
     check_border_dynamic,
+    compute_dynamic_word_batch,
     compute_entropy,
     is_target_language,
     load_head_config,
@@ -286,8 +288,15 @@ class AlignAttLABackend(SimulMTBackend):
             self._source_words.append(source_word)
             self._batch_counter += 1
 
+            # Dynamic or fixed word batching
+            effective_wb = self.config.word_batch
+            if self.config.dynamic_word_batch:
+                effective_wb = compute_dynamic_word_batch(
+                    self.config.word_batch, len(self._source_words)
+                )
+
             # Word batching
-            if self._batch_counter < self.config.word_batch and not is_final:
+            if self._batch_counter < effective_wb and not is_final:
                 return TranslationStep(
                     text="",
                     is_final=False,
@@ -335,7 +344,28 @@ class AlignAttLABackend(SimulMTBackend):
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
-        """Check border with all configured enhancements (AMS, temp norm, dynamic)."""
+        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain)."""
+        # Use combined check if shift-k or info-gain enabled
+        use_combined = (
+            self.config.shift_k_threshold is not None
+            or self.config.info_gain_threshold is not None
+        )
+        if use_combined:
+            hit, _, _ = check_border_combined(
+                src_attn, self._ts_scores,
+                num_src_tokens, self.config.border_distance,
+                aggregation=self.config.aggregation,
+                adaptive_aggregation=self.config.adaptive_aggregation,
+                head_temp_normalize=self.config.head_temp_normalize,
+                head_temp_reference=self.config.head_temp_reference,
+                shift_k_threshold=self.config.shift_k_threshold,
+                prev_attn=getattr(self, '_prev_step_attn', None),
+                info_gain_threshold=self.config.info_gain_threshold,
+                dynamic_border=self.config.dynamic_border,
+            )
+            self._prev_step_attn = src_attn.copy()
+            return hit
+
         if self.config.dynamic_border:
             return check_border_dynamic(
                 src_attn, self._ts_scores,
@@ -417,6 +447,7 @@ class AlignAttLABackend(SimulMTBackend):
         # Generate tokens
         gen_ids = []
         max_gen = 256 if is_final else self.config.max_new_per_step
+        consecutive_border_hits = 0  # For border confirmation
 
         for step in range(max_gen):
             next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
@@ -444,8 +475,12 @@ class AlignAttLABackend(SimulMTBackend):
                     src_attn = attn[:, src_start:src_end]
                     border_hit = self._check_border(src_attn, num_src_tokens)
                     if border_hit:
-                        gen_ids.append(next_tok)
-                        break
+                        consecutive_border_hits += 1
+                        if consecutive_border_hits >= self.config.border_confirm:
+                            gen_ids.append(next_tok)
+                            break
+                    else:
+                        consecutive_border_hits = 0
 
             gen_ids.append(next_tok)
 
@@ -500,6 +535,7 @@ class AlignAttLABackend(SimulMTBackend):
 
         # Generate new tokens beyond the committed prefix
         max_gen = self.config.max_new_per_step - len(gen_ids)
+        consecutive_border_hits = 0
 
         for step in range(max(0, max_gen)):
             next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
@@ -527,8 +563,12 @@ class AlignAttLABackend(SimulMTBackend):
                     src_attn = attn[:, src_start:src_end]
                     border_hit = self._check_border(src_attn, num_src_tokens)
                     if border_hit:
-                        gen_ids.append(next_tok)
-                        break
+                        consecutive_border_hits += 1
+                        if consecutive_border_hits >= self.config.border_confirm:
+                            gen_ids.append(next_tok)
+                            break
+                    else:
+                        consecutive_border_hits = 0
 
             gen_ids.append(next_tok)
 
@@ -645,6 +685,7 @@ class AlignAttLABackend(SimulMTBackend):
 
         # === Phase 3: Autoregressive continuation with border detection ===
         max_gen = self.config.max_new_per_step - len(gen_ids)
+        consecutive_border_hits = 0
         for step in range(max(0, max_gen)):
             next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
             if next_tok in self._stop_ids or next_tok < 0:
@@ -671,8 +712,12 @@ class AlignAttLABackend(SimulMTBackend):
                     src_attn = attn[:, src_start:src_end]
                     border_hit = self._check_border(src_attn, num_src_tokens)
                     if border_hit:
-                        gen_ids.append(next_tok)
-                        break
+                        consecutive_border_hits += 1
+                        if consecutive_border_hits >= self.config.border_confirm:
+                            gen_ids.append(next_tok)
+                            break
+                    else:
+                        consecutive_border_hits = 0
 
             gen_ids.append(next_tok)
 

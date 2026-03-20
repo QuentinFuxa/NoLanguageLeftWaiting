@@ -64,6 +64,10 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "ams": "adaptive_aggregation",
         "tempnorm": "head_temp_normalize",
         "tempref": "head_temp_reference",
+        "dynwb": "dynamic_word_batch",
+        "infogain": "info_gain_threshold",
+        "shiftk": "shift_k_threshold",
+        "confirm": "border_confirm",
     }
 
     grid = {}
@@ -125,6 +129,10 @@ def run_benchmark(args):
         adaptive_aggregation=args.adaptive_agg,
         head_temp_normalize=args.head_temp_norm,
         head_temp_reference=args.head_temp_ref,
+        dynamic_word_batch=args.dynamic_wb,
+        info_gain_threshold=args.info_gain,
+        shift_k_threshold=args.shift_k,
+        border_confirm=args.border_confirm,
     )
 
     backend = create_backend(config)
@@ -260,7 +268,8 @@ def main():
     parser.add_argument("--aggregation", default="ts_vote",
                         choices=["ts_vote", "softmax_mean", "entropy_weighted",
                                  "consensus", "geomean", "top_p", "ensemble",
-                                 "gaussian_kernel", "gaussian_kernel_continuous"],
+                                 "gaussian_kernel", "gaussian_kernel_continuous",
+                                 "cumulative"],
                         help="Attention aggregation method for border detection")
     parser.add_argument("--dynamic-border", action="store_true",
                         help="Enable entropy-based dynamic border distance")
@@ -278,6 +287,14 @@ def main():
                         help="Enable per-head temperature normalization")
     parser.add_argument("--head-temp-ref", type=float, default=1.5,
                         help="Reference entropy for head temperature normalization")
+    parser.add_argument("--dynamic-wb", action="store_true",
+                        help="Enable dynamic word_batch (adjust by source length)")
+    parser.add_argument("--info-gain", type=float, default=None,
+                        help="Info gain threshold for border modulation (0.3=recommended, None=disabled)")
+    parser.add_argument("--shift-k", type=float, default=None,
+                        help="Shift-k border mass threshold (0.4=recommended, None=disabled)")
+    parser.add_argument("--border-confirm", type=int, default=1,
+                        help="Require N consecutive border hits to stop (1=disabled, 2=recommended)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

@@ -117,6 +117,52 @@
   - Confirms ICLR 2026 "Translation Heads" paper: most models have universal alignment heads
 - [x] 290 unit tests (46 new, all passing)
 
+## DONE -- Iteration 7: Dynamic WB, Info Gain, Shift-K Border
+
+- [x] **Dynamic word_batch** (`dynamic_word_batch` config, `--dynamic-wb` CLI):
+  - Adjust word_batch based on source sentence length
+  - Short sentences (< 8 words) -> wb - 1 (faster latency)
+  - Long sentences (> 20 words) -> wb + 1 (safer, less hallucination)
+  - Medium sentences keep base wb. Minimum wb = 1.
+  - Sweep: `dynwb=0,1`
+- [x] **Attention information gain** (`info_gain_threshold` config, `--info-gain` CLI):
+  - KL divergence between consecutive attention snapshots as secondary border signal
+  - Large KL = model processing new source info -> keep generating (inhibit stop)
+  - Small KL = source exhausted -> reinforce border stop
+  - Inspired by LSG (arxiv 2501.00868) KL(P_partial || P_full) approach
+  - Modulates both standard AlignAtt and shift-k border decisions
+  - Sweep: `infogain=0.2,0.3,0.5`
+- [x] **Shift-k adaptive border** (`shift_k_threshold` config, `--shift-k` CLI):
+  - Measure total attention MASS in border region instead of just argmax position
+  - Inspired by DrFrattn (EMNLP 2025) "shift-k" mechanism
+  - Softer, more robust signal: catches cases where attention splits between
+    border and near-border positions (30% here + 30% there = stop)
+  - TS-weighted border mass: if >= threshold -> stop
+  - Sweep: `shiftk=0.3,0.4,0.5`
+- [x] **Combined border check** (`check_border_combined()` in alignatt.py):
+  - Multi-signal fusion: standard AlignAtt + shift-k mass + info gain
+  - Decision logic: info gain inhibits/reinforces, shift-k fires on mass, standard fallback
+  - Returns diagnostic values (info_gain, border_mass) for analysis
+  - Wired into both AlignAtt and AlignAtt-LA backends
+- [x] **Border confirmation** (`border_confirm` config, `--border-confirm` CLI):
+  - Require N consecutive border hits before stopping generation
+  - Prevents false positive stops from transient attention patterns
+  - 1 = standard (stop on first hit), 2 = recommended for high quality
+  - Sweep: `confirm=1,2,3`
+- [x] **Source complexity estimator** (`nllw/complexity.py`):
+  - Novel: per-sentence complexity scoring (0-1) from text features
+  - Signals: word count, avg word length, subword ratio, numeral density, punctuation
+  - Maps to adaptive parameter adjustments (bd, wb, gen_cap)
+  - `estimate_complexity()`, `adaptive_params_from_complexity()`, `classify_complexity()`
+- [x] **Cumulative attention aggregation** (10th method, from DrFrattn EMNLP 2025):
+  - Compute cumulative attention mass instead of argmax position
+  - Frontier = rightmost position where remaining mass >= lambda
+  - Captures distribution shape: split attention correctly identified
+  - Lambda parameter gives continuous latency control
+  - `--aggregation cumulative` CLI, usable in `agg=cumulative` sweep
+  - Research documented in `docs/research/drfrattn-analysis.md`
+- [x] 360 unit tests (70 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -136,7 +182,7 @@
 - [ ] KV cache speedup measurement (with vs without)
 - [ ] Entropy veto threshold tuning (0.5, 0.75, 1.0)
 - [ ] Pareto frontier analysis: bd={2,3,4,5} x wb={1,2,3} x all directions
-- [ ] **Aggregation method sweep on A40** (now 9 methods): `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p,gaussian_kernel,gaussian_kernel_continuous,ensemble" --lang en-zh --comet --save`
+- [ ] **Aggregation method sweep on A40** (now 10 methods): `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p,gaussian_kernel,gaussian_kernel_continuous,cumulative,ensemble" --lang en-zh --comet --save`
 - [ ] **AlignAtt vs AlignAtt-LA comparison**: `python -m nllw.bench --compare alignatt alignatt-la --lang en-zh --comet --save`
 - [ ] **Cross-aggregation x direction**: Sweep all 9 aggregation methods across en-zh, en-de, en-it, cs-en
 - [ ] **Dynamic border distance test**: `python -m nllw.bench --lang en-zh --dynamic-border --comet --save` vs fixed bd=3
@@ -148,8 +194,18 @@
 - [ ] **Head temp normalization test**: `python -m nllw.bench --head-temp-norm --lang en-zh --comet --save` vs unnormalized
 - [ ] **Combined AMS + temp norm**: `python -m nllw.bench --adaptive-agg --head-temp-norm --lang en-zh --comet --save`
 - [ ] **Full iteration 6 sweep**: `python -m nllw.bench --sweep "ams=0,1 tempnorm=0,1 twopass=0,1" --backend alignatt-la --lang en-zh --comet --save`
+- [ ] **Dynamic word_batch test**: `python -m nllw.bench --dynamic-wb --lang en-zh --comet --save` vs fixed wb=3
+- [ ] **Shift-k border sweep**: `python -m nllw.bench --sweep "shiftk=0.3,0.4,0.5,0.6" --lang en-zh --comet --save`
+- [ ] **Info gain sweep**: `python -m nllw.bench --sweep "infogain=0.2,0.3,0.5" --lang en-zh --comet --save`
+- [ ] **Combined shift-k + info gain**: `python -m nllw.bench --shift-k 0.4 --info-gain 0.3 --lang en-zh --comet --save`
+- [ ] **Full iteration 7 sweep**: `python -m nllw.bench --sweep "dynwb=0,1 shiftk=0.4 infogain=0.3" --lang en-zh --comet --save`
+- [ ] **Border confirmation sweep**: `python -m nllw.bench --sweep "confirm=1,2,3" --lang en-zh --comet --save`
+- [ ] **Combined shift-k + confirm**: `python -m nllw.bench --shift-k 0.4 --border-confirm 2 --lang en-zh --comet --save`
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
+
+### HIGHEST Priority (ready to implement)
+- [ ] **LSG logit KL divergence** (arxiv 2501.00868, AAAI 2025, TRAINING-FREE): Compare output logit distributions with full vs reduced source. Direct signal: "did more source change the output?" KL > delta -> keep generating. Need `llama_kv_cache_seq_cp` in llama_backend.py. Code: github.com/ictnlp/LSG. See `docs/research/reina-lsg-analysis.md`.
 
 ### High Priority (open research gaps, no published work)
 - [x] **Novel aggregation** (IMPLEMENTED): 9 methods total -- ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble. **Needs GPU testing.**
@@ -167,7 +223,7 @@
 ### Medium Priority (validated by SOTA papers)
 - [x] **Cross-lingual head transfer** (IMPLEMENTED): `python -m nllw.head_transfer --all`. **Results: EuroLLM/HY-MT/Qwen3.5 excellent (>97%), Qwen3-4B good (80%).**
 - [x] **LocalAgreement + AlignAtt hybrid** (IMPLEMENTED): `alignatt-la` backend. **Needs GPU testing.**
-- [ ] ExPosST-style position slot reservation (arxiv 2603.14903) for zero-recomputation KV cache
+- [ ] ExPosST-style position slot reservation (arxiv 2603.14903) -- **requires LoRA fine-tuning**, see `docs/research/gpe-exposst-analysis.md`
 - [ ] Dynamic word_batch based on source complexity (short sentences -> smaller wb)
 - [x] **Adaptive Multi-Strategy (AMS)** (IMPLEMENTED): `--adaptive-agg` flag. Per-token aggregation selection. **Needs GPU testing.**
 - [x] **Per-head temperature normalization** (IMPLEMENTED): `--head-temp-norm` flag. Binary search temperature. **Needs GPU testing.**
@@ -178,7 +234,7 @@
 - [ ] **SSD parallel speculation** (arxiv 2603.03251): Extend SSBD to predict verification outcomes and pre-compute multiple draft continuations. Up to 2x over standard spec dec.
 
 ### NEW High Priority (Iteration 6 SOTA survey, see docs/research/sota-simulmt-2026.md)
-- [ ] **Group Position Encoding** (arxiv 2505.16983, ACL 2025): Separate position IDs for source/target. No retraining. Code: github.com/EIT-NLP/StreamingLLM. Implementable in llama.cpp position ID manipulation.
+- [ ] **Group Position Encoding** (arxiv 2505.16983, ACL 2025): Separate position IDs for source/target. **Requires LoRA fine-tuning** (NOT zero-shot despite claims). Key finding: position mismatch is negligible (<0.14 BLEU) -- validates our KV cache approach. See `docs/research/gpe-exposst-analysis.md`.
 - [ ] **REINA information gain policy** (arxiv 2508.04946, AAAI 2026 Oral): Principled entropy-based READ/WRITE. Extends our entropy_veto_threshold with info-theoretic grounding. 21% latency/quality improvement.
 - [ ] **AliBaStr-MT learned border** (arxiv 2503.22051, Apple): Train 6M-param classifier on our TS alignment data. Tunable delta threshold at inference. Replaces heuristic border_distance.
 - [ ] **DrFrattn attention-based policy** (EMNLP 2025): Closest published work to our AlignAtt. "Shift-k" mechanism for adaptive thresholds -- must read.
@@ -186,7 +242,7 @@
 - [ ] **RL-optimized SSBD** (arxiv 2603.01639, ICLR 2026): RL-optimize SSBD beta per-context instead of fixed 0.2. 2.24-4.32x speedup.
 
 ### Lower Priority (competitive intelligence)
-- [ ] Test Group Position Encoding (ACL 2025, github.com/eit-nlp/streamingllm) as alternative to our KV cache approach
+- [ ] Test Group Position Encoding (ACL 2025) -- needs LoRA fine-tuning. Position mismatch validated as negligible. See analysis.
 - [ ] Evaluate SimulSense-style sense unit detection (arxiv 2509.21932) for chunking
 - [ ] OmniSTEval integration: end-to-end IWSLT eval pipeline
 - [ ] Human-like strategies: SENTENCE_CUT, DROP, PRONOMINALIZATION (arxiv 2601.11002)
