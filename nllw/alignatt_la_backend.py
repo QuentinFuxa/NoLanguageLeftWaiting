@@ -301,7 +301,10 @@ class AlignAttLABackend(SimulMTBackend):
                 self._init_segment()
 
             # Full re-translation from scratch
-            new_full_ids = self._retranslate(is_final)
+            if self.config.la_two_pass and not is_final and self._prev_full_ids:
+                new_full_ids = self._retranslate_two_pass()
+            else:
+                new_full_ids = self._retranslate(is_final)
 
             # Track revision history for NE metric
             self._revision_history.append(list(new_full_ids))
@@ -329,6 +332,27 @@ class AlignAttLABackend(SimulMTBackend):
                 stopped_at_border=not is_final and len(new_full_ids) > 0,
                 source_words_seen=len(self._source_words),
                 generation_time_ms=elapsed_ms,
+            )
+
+    def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
+        """Check border with all configured enhancements (AMS, temp norm, dynamic)."""
+        if self.config.dynamic_border:
+            return check_border_dynamic(
+                src_attn, self._ts_scores,
+                num_src_tokens, self.config.border_distance,
+                aggregation=self.config.aggregation,
+                adaptive_aggregation=self.config.adaptive_aggregation,
+                head_temp_normalize=self.config.head_temp_normalize,
+                head_temp_reference=self.config.head_temp_reference,
+            )
+        else:
+            return check_border(
+                src_attn, self._ts_scores,
+                num_src_tokens, self.config.border_distance,
+                aggregation=self.config.aggregation,
+                adaptive_aggregation=self.config.adaptive_aggregation,
+                head_temp_normalize=self.config.head_temp_normalize,
+                head_temp_reference=self.config.head_temp_reference,
             )
 
     def _retranslate(self, is_final: bool) -> List[int]:
@@ -418,18 +442,7 @@ class AlignAttLABackend(SimulMTBackend):
                 )
                 if attn is not None and src_end <= attn.shape[1]:
                     src_attn = attn[:, src_start:src_end]
-                    if self.config.dynamic_border:
-                        border_hit = check_border_dynamic(
-                            src_attn, self._ts_scores,
-                            num_src_tokens, self.config.border_distance,
-                            aggregation=self.config.aggregation,
-                        )
-                    else:
-                        border_hit = check_border(
-                            src_attn, self._ts_scores,
-                            num_src_tokens, self.config.border_distance,
-                            aggregation=self.config.aggregation,
-                        )
+                    border_hit = self._check_border(src_attn, num_src_tokens)
                     if border_hit:
                         gen_ids.append(next_tok)
                         break
@@ -512,18 +525,7 @@ class AlignAttLABackend(SimulMTBackend):
                 )
                 if attn is not None and src_end <= attn.shape[1]:
                     src_attn = attn[:, src_start:src_end]
-                    if self.config.dynamic_border:
-                        border_hit = check_border_dynamic(
-                            src_attn, self._ts_scores,
-                            num_src_tokens, self.config.border_distance,
-                            aggregation=self.config.aggregation,
-                        )
-                    else:
-                        border_hit = check_border(
-                            src_attn, self._ts_scores,
-                            num_src_tokens, self.config.border_distance,
-                            aggregation=self.config.aggregation,
-                        )
+                    border_hit = self._check_border(src_attn, num_src_tokens)
                     if border_hit:
                         gen_ids.append(next_tok)
                         break
@@ -667,18 +669,7 @@ class AlignAttLABackend(SimulMTBackend):
                 )
                 if attn is not None and src_end <= attn.shape[1]:
                     src_attn = attn[:, src_start:src_end]
-                    if self.config.dynamic_border:
-                        border_hit = check_border_dynamic(
-                            src_attn, self._ts_scores,
-                            num_src_tokens, self.config.border_distance,
-                            aggregation=self.config.aggregation,
-                        )
-                    else:
-                        border_hit = check_border(
-                            src_attn, self._ts_scores,
-                            num_src_tokens, self.config.border_distance,
-                            aggregation=self.config.aggregation,
-                        )
+                    border_hit = self._check_border(src_attn, num_src_tokens)
                     if border_hit:
                         gen_ids.append(next_tok)
                         break
@@ -689,6 +680,57 @@ class AlignAttLABackend(SimulMTBackend):
         ll.memory_seq_rm(self._mem, 0, prefix_len, -1)
 
         return gen_ids
+
+    def _retranslate_two_pass(self) -> List[int]:
+        """LA Two-Pass Catch-up: run two independent re-translations and keep
+        the one with the longer common prefix with the previous translation.
+
+        CUNI approach (Polak et al., IWSLT 2025): running an extra re-translation
+        pass catches instability from attention drift. Between the two outputs,
+        the one that's more consistent with previous output is more reliable.
+
+        Motivation: AlignAtt border detection is stochastic -- small attention
+        fluctuations can cause different translations. Two passes with different
+        initialization expose this variance. Picking the more stable output
+        reduces output flicker (lower NE) at the cost of 2x compute.
+
+        The second pass uses a slightly different strategy: if SSBD was used
+        for pass 1, pass 2 uses standard re-translation (or vice versa).
+        This diversity increases the chance of catching instability.
+
+        Returns:
+            The more stable of the two translation token ID lists
+        """
+        # Pass 1: standard strategy selection
+        pass1_ids = self._retranslate(is_final=False)
+
+        # Pass 2: alternative strategy for diversity
+        # If pass 1 used SSBD, pass 2 uses forced or standard
+        # If pass 1 used forced or standard, pass 2 uses standard (fresh)
+        saved_ssbd = self.config.ssbd_beta
+        saved_forced = self.config.la_forced_decode
+
+        # Disable SSBD/forced for pass 2 to get a "fresh" re-translation
+        self.config.ssbd_beta = None
+        self.config.la_forced_decode = False
+        pass2_ids = self._retranslate_standard(is_final=False)
+
+        # Restore config
+        self.config.ssbd_beta = saved_ssbd
+        self.config.la_forced_decode = saved_forced
+
+        # Pick the more stable translation (longer common prefix with previous)
+        prev = self._prev_full_ids
+        lcp1 = _longest_common_prefix_tokens(prev, pass1_ids)
+        lcp2 = _longest_common_prefix_tokens(prev, pass2_ids)
+
+        if lcp2 > lcp1:
+            return pass2_ids
+        elif lcp1 > lcp2:
+            return pass1_ids
+        else:
+            # Tie-break: prefer the longer translation (more content committed)
+            return pass1_ids if len(pass1_ids) >= len(pass2_ids) else pass2_ids
 
     def _commit_stable_prefix(self, new_full_ids: List[int]) -> str:
         """Find and commit the stable prefix between old and new translations.

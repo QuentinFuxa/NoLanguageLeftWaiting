@@ -60,6 +60,10 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "mask": "display_mask_k",
         "forced": "la_forced_decode",
         "adaptive": "adaptive_ssbd",
+        "twopass": "la_two_pass",
+        "ams": "adaptive_aggregation",
+        "tempnorm": "head_temp_normalize",
+        "tempref": "head_temp_reference",
     }
 
     grid = {}
@@ -117,6 +121,10 @@ def run_benchmark(args):
         ssbd_beta=args.ssbd_beta,
         la_forced_decode=args.forced_decode,
         adaptive_ssbd=args.adaptive_ssbd,
+        la_two_pass=args.two_pass,
+        adaptive_aggregation=args.adaptive_agg,
+        head_temp_normalize=args.head_temp_norm,
+        head_temp_reference=args.head_temp_ref,
     )
 
     backend = create_backend(config)
@@ -262,6 +270,14 @@ def main():
                         help="Enable LA forced decoding of committed prefix (CUNI approach)")
     parser.add_argument("--adaptive-ssbd", action="store_true",
                         help="Enable entropy-based adaptive SSBD beta (per-token)")
+    parser.add_argument("--two-pass", action="store_true",
+                        help="Enable LA two-pass catch-up (2x compute for stability)")
+    parser.add_argument("--adaptive-agg", action="store_true",
+                        help="Enable Adaptive Multi-Strategy (AMS) aggregation selection")
+    parser.add_argument("--head-temp-norm", action="store_true",
+                        help="Enable per-head temperature normalization")
+    parser.add_argument("--head-temp-ref", type=float, default=1.5,
+                        help="Reference entropy for head temperature normalization")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

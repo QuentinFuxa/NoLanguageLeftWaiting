@@ -373,6 +373,160 @@ def aggregate_gaussian_kernel_continuous(
     return float(np.argmax(smoothed))
 
 
+def normalize_head_temperatures(
+    src_attn: np.ndarray,
+    reference_entropy: float = 1.5,
+) -> np.ndarray:
+    """Normalize attention distributions to have uniform sharpness across heads.
+
+    Different attention heads have different "temperatures" -- some produce
+    sharp distributions (low entropy) and some produce broad ones (high entropy).
+    This imbalance means sharp heads dominate argmax-based aggregation regardless
+    of their actual reliability.
+
+    This function rescales each head's attention distribution to match a target
+    reference entropy, ensuring fair comparison in downstream aggregation.
+
+    Method: For each head, compute its entropy. If entropy < reference, soften
+    the distribution (raise to power < 1). If entropy > reference, sharpen it
+    (raise to power > 1). The power is calibrated to approximately match the
+    reference entropy.
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        reference_entropy: Target entropy in nats (default: 1.5)
+            Lower = sharper normalized attention. Higher = broader.
+            1.5 nats ~ uniform over ~4.5 positions (exp(1.5)).
+
+    Returns:
+        Normalized attention weights (n_heads, n_src), same shape
+    """
+    n_heads, n_src = src_attn.shape
+    if n_src <= 1:
+        return src_attn.copy()
+
+    eps = 1e-10
+    result = np.zeros_like(src_attn)
+
+    for h in range(n_heads):
+        p = src_attn[h] + eps
+        p = p / p.sum()
+        head_entropy = float(-np.sum(p * np.log(p)))
+
+        if abs(head_entropy - reference_entropy) < 0.05 or head_entropy < eps:
+            result[h] = p
+            continue
+
+        # Use logits to rescale temperature.
+        # Convert probs back to logits, rescale, then softmax.
+        # If head_entropy > reference: need to sharpen (divide logits by T<1)
+        # If head_entropy < reference: need to broaden (divide logits by T>1)
+        log_p = np.log(p)
+        log_p = log_p - np.mean(log_p)  # center for numerical stability
+
+        # Binary search for temperature that gives reference entropy
+        # Start with analytical estimate
+        t_lo, t_hi = 0.01, 50.0
+        for _ in range(30):
+            t_mid = (t_lo + t_hi) / 2
+            scaled = log_p / t_mid
+            scaled = scaled - np.max(scaled)
+            q = np.exp(scaled)
+            q = q / q.sum()
+            ent = float(-np.sum(q * np.log(q + eps)))
+            if ent < reference_entropy:
+                t_lo = t_mid  # need more temperature (broaden)
+            else:
+                t_hi = t_mid  # need less temperature (sharpen)
+
+        # Apply final temperature
+        t_final = (t_lo + t_hi) / 2
+        scaled = log_p / t_final
+        scaled = scaled - np.max(scaled)
+        p_rescaled = np.exp(scaled)
+        p_rescaled = p_rescaled / p_rescaled.sum()
+        result[h] = p_rescaled
+
+    return result
+
+
+def select_adaptive_aggregation(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+) -> str:
+    """Adaptive Multi-Strategy (AMS): select the best aggregation method
+    based on the current attention pattern.
+
+    Novel approach: no published work on per-token aggregation selection
+    for SimulMT. We analyze two signals:
+
+    1. Head agreement ratio: fraction of heads whose argmax is within +/-1
+       of the majority argmax. High agreement -> simple methods work.
+       Low agreement -> need robust methods.
+
+    2. Mean attention entropy: how diffuse the attention is across heads.
+       Low entropy -> heads are confident -> trust argmax methods.
+       High entropy -> heads are uncertain -> use distribution-aware methods.
+
+    Selection logic:
+        agreement >= 0.7 AND entropy <= 1.0: ts_vote (all agree, sharp)
+        agreement >= 0.7 AND entropy > 1.0:  entropy_weighted (agree, but diffuse)
+        agreement < 0.7  AND entropy <= 1.5: geomean (disagreement, but sharp)
+        agreement < 0.7  AND entropy > 1.5:  consensus (disagreement + diffuse)
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+
+    Returns:
+        Name of the selected aggregation method
+    """
+    n_heads, n_src = src_attn.shape
+    if n_heads == 0 or n_src == 0:
+        return "ts_vote"
+
+    eps = 1e-10
+
+    # 1. Head agreement ratio
+    head_argmaxes = np.argmax(src_attn, axis=1)
+    # Find the most common argmax (mode)
+    counts = {}
+    for pos in head_argmaxes:
+        pos = int(pos)
+        counts[pos] = counts.get(pos, 0) + 1
+    mode_pos = max(counts, key=counts.get)
+
+    # Count heads within +/-1 of mode
+    agreeing = sum(1 for pos in head_argmaxes if abs(int(pos) - mode_pos) <= 1)
+    agreement_ratio = agreeing / n_heads
+
+    # 2. Mean attention entropy (TS-weighted)
+    entropies = np.zeros(n_heads)
+    for h in range(n_heads):
+        p = src_attn[h] + eps
+        p = p / p.sum()
+        entropies[h] = -np.sum(p * np.log(p))
+
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < eps:
+        mean_entropy = float(np.mean(entropies))
+    else:
+        mean_entropy = float(np.dot(ts, entropies) / ts_sum)
+
+    # 3. Selection
+    if agreement_ratio >= 0.7:
+        if mean_entropy <= 1.0:
+            return "ts_vote"
+        else:
+            return "entropy_weighted"
+    else:
+        if mean_entropy <= 1.5:
+            return "geomean"
+        else:
+            return "consensus"
+
+
 def aggregate_ensemble(
     src_attn: np.ndarray,
     ts_scores: List[float],
@@ -469,6 +623,9 @@ def check_border(
     n_src_tokens: int,
     border_distance: int,
     aggregation: str = "ts_vote",
+    adaptive_aggregation: bool = False,
+    head_temp_normalize: bool = False,
+    head_temp_reference: float = 1.5,
 ) -> bool:
     """Check if the attention has reached the border region.
 
@@ -483,6 +640,9 @@ def check_border(
         n_src_tokens: Number of source tokens
         border_distance: How many tokens from the end define the border
         aggregation: Aggregation method (default: "ts_vote")
+        adaptive_aggregation: If True, auto-select aggregation per token (AMS)
+        head_temp_normalize: If True, normalize head temperatures before aggregation
+        head_temp_reference: Reference entropy for temperature normalization
 
     Returns:
         True if border hit (should stop generating)
@@ -491,7 +651,15 @@ def check_border(
     if border_threshold <= 0:
         return False
 
-    attended_pos = aggregate(src_attn, ts_scores, method=aggregation)
+    attn = src_attn
+    if head_temp_normalize:
+        attn = normalize_head_temperatures(attn, head_temp_reference)
+
+    method = aggregation
+    if adaptive_aggregation:
+        method = select_adaptive_aggregation(attn, ts_scores)
+
+    attended_pos = aggregate(attn, ts_scores, method=method)
     return attended_pos >= border_threshold
 
 
@@ -583,6 +751,9 @@ def check_border_dynamic(
     low_entropy: float = 0.5,
     high_entropy: float = 2.0,
     max_bd_delta: int = 3,
+    adaptive_aggregation: bool = False,
+    head_temp_normalize: bool = False,
+    head_temp_reference: float = 1.5,
 ) -> bool:
     """Check border with dynamic border distance based on attention entropy.
 
@@ -599,12 +770,19 @@ def check_border_dynamic(
         low_entropy: Confident threshold
         high_entropy: Uncertain threshold
         max_bd_delta: Max border widening
+        adaptive_aggregation: If True, auto-select aggregation per token (AMS)
+        head_temp_normalize: If True, normalize head temperatures before aggregation
+        head_temp_reference: Reference entropy for temperature normalization
 
     Returns:
         True if border hit (should stop generating)
     """
+    attn = src_attn
+    if head_temp_normalize:
+        attn = normalize_head_temperatures(attn, head_temp_reference)
+
     effective_bd = dynamic_border_distance(
-        src_attn, ts_scores, base_border_distance, n_src_tokens,
+        attn, ts_scores, base_border_distance, n_src_tokens,
         low_entropy=low_entropy, high_entropy=high_entropy,
         max_bd_delta=max_bd_delta,
     )
@@ -613,7 +791,11 @@ def check_border_dynamic(
     if border_threshold <= 0:
         return False
 
-    attended_pos = aggregate(src_attn, ts_scores, method=aggregation)
+    method = aggregation
+    if adaptive_aggregation:
+        method = select_adaptive_aggregation(attn, ts_scores)
+
+    attended_pos = aggregate(attn, ts_scores, method=method)
     return attended_pos >= border_threshold
 
 
