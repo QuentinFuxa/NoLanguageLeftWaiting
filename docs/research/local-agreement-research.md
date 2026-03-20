@@ -66,4 +66,16 @@ Our alignatt_la_backend.py improvements vs iwslt26-sst:
 Potential improvements (from CUNI):
 - Forced decoding of committed prefix before generating
 - Two-pass catch-up: extra LA comparison per update
-- SSBD integration for speculative draft reuse
+- ~~SSBD integration for speculative draft reuse~~ **DONE (Iteration 4)**
+
+## SSBD Implementation (Iteration 4)
+
+Implemented in `alignatt_la_backend.py`:
+- `ssbd_accept()`: Biased acceptance via log-ratio trick (avoids full softmax)
+- `_retranslate_ssbd()`: 3-phase algorithm:
+  1. Batch verify draft (one forward pass with `output_last_only=False`)
+  2. Biased acceptance: `P'(draft) = (1-beta)*P(draft) + beta`
+  3. Autoregressive continuation from divergence point
+- Config: `ssbd_beta=0.2` recommended, sweep via `ssbd=0.0,0.1,0.2,0.3`
+- Stats: `get_ssbd_stats()` returns acceptance rate
+- **Needs GPU testing on A40**

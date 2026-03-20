@@ -128,13 +128,13 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~7,200 lines across 19 SimulMT modules, 172 tests
+### What exists now: ~7,800 lines across 21 SimulMT modules, 199 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
 |---------|------|------|---------|
 | `alignatt` | Primary | `nllw/alignatt_backend.py` (462 lines) | Attention-based border detection + entropy veto + KV cache reuse |
-| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~280 lines) | LocalAgreement + AlignAtt: re-translate, diff, commit stable prefix |
+| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~550 lines) | LocalAgreement + AlignAtt + SSBD: re-translate, diff, commit stable prefix |
 | `wait-k` | Baseline | `nllw/baselines.py` (175 lines) | Standard wait-k policy baseline |
 | `fixed-rate` | Baseline | `nllw/baselines.py` | Fixed-interval emission |
 | `full-sentence` | Baseline | `nllw/alignatt_backend.py` | Quality upper bound (offline) |
@@ -151,7 +151,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `experiment.py` | 359 | Experiment YAML config/result registry |
 | `analysis.py` | 309 | Pareto frontier, edge cases, report generation |
 | `detect_heads.py` | 559 | Auto alignment head detection for any GGUF model |
-| `metrics.py` | 257 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics |
+| `metrics.py` | 330 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics + NE (Normalized Erasure) |
 | `bench.py` | 264 | Unified one-command benchmarking CLI with sweep, compare |
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
@@ -159,12 +159,13 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `alignatt.py` | 654 | Core border detection + 7 aggregation methods + dynamic border + ensemble |
 
 **Infrastructure:**
-- `backend_protocol.py` (139 lines) -- SimulMTBackend ABC + `create_backend()` factory
+- `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
 - `llama_backend.py` (541 lines) -- ctypes wrapper for custom llama.cpp with attention extraction API
-- `alignatt_la_backend.py` (~280 lines) -- LocalAgreement + AlignAtt hybrid backend
+- `alignatt_la_backend.py` (~550 lines) -- LocalAgreement + AlignAtt + SSBD hybrid backend
 - 22 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
 - Context injection (rolling buffer of previous translations)
 - 7 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, ensemble
+- SSBD (Self-Speculative Biased Decoding): previous translation as draft, batch verify, 1.3-1.7x speedup
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
@@ -180,6 +181,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `aggregation` | "ts_vote" | 7 methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, ensemble |
 | `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
+| `ssbd_beta` | None | SSBD bias for LA backend. None=disabled, 0.0=pure speculative, 0.2=recommended |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 
@@ -250,6 +252,12 @@ python -m nllw.bench --sweep "bd=2,3,4 wb=1,2,3" --lang en-zh,en-de,en-it --come
 
 # Export to OmniSTEval format (IWSLT submission)
 python -m nllw.bench --suite corpus --lang en-zh --omnisteval output.jsonl --save
+
+# SSBD speedup test for LA backend
+python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --lang en-zh --comet --save
+
+# SSBD sweep
+python -m nllw.bench --backend alignatt-la --sweep "ssbd=0.0,0.1,0.2,0.3" --lang en-zh --comet --save
 
 # --- Other tools ---
 # Run evaluation (lower-level)

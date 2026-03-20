@@ -1,0 +1,31 @@
+# Multi-direction SSBD evaluation
+# Tests SSBD across all 5 directions to measure cross-lingual consistency
+name: ssbd-multidirection
+backend:
+  backend_type: alignatt-la
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+  ssbd_beta: 0.2
+eval:
+  n_sentences: 30
+  suite: flores
+  comet: true
+directions:
+  - en-zh
+  - en-de
+  - en-it
+  - en-fr
+  - cs-en
+notes: >
+  Run separately per direction:
+    for dir in en-zh en-de en-it en-fr cs-en; do
+      python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --lang $dir --comet --save -n 30
+    done
+  Compare ms/sentence across directions to verify SSBD speedup is consistent.
+tags:
+  - ssbd
+  - multi-direction
+  - evaluation

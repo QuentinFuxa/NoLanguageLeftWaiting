@@ -56,6 +56,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "entropy": "entropy_veto_threshold",
         "agg": "aggregation",
         "dynbd": "dynamic_border",
+        "ssbd": "ssbd_beta",
+        "mask": "display_mask_k",
     }
 
     grid = {}
@@ -110,6 +112,7 @@ def run_benchmark(args):
         entropy_veto_threshold=args.entropy_threshold,
         aggregation=args.aggregation,
         dynamic_border=args.dynamic_border,
+        ssbd_beta=args.ssbd_beta,
     )
 
     backend = create_backend(config)
@@ -248,6 +251,8 @@ def main():
                         help="Attention aggregation method for border detection")
     parser.add_argument("--dynamic-border", action="store_true",
                         help="Enable entropy-based dynamic border distance")
+    parser.add_argument("--ssbd-beta", type=float, default=None,
+                        help="SSBD bias (0.0=pure speculative, 0.2=recommended, None=disabled)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

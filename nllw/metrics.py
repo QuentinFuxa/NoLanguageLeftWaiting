@@ -198,6 +198,82 @@ def compute_all_metrics(
 # Quality metrics (wrappers)
 # ---------------------------------------------------------------------------
 
+def compute_normalized_erasure(
+    revision_history: List[List[int]],
+) -> float:
+    """Normalized Erasure (NE) -- measures output instability in re-translation.
+
+    From Arivazhagan et al. (2020): NE quantifies how much of the output is
+    revised between consecutive re-translations. Lower is better.
+
+    NE = (1/J) * sum_{i=2}^{J} [ |o_{i-1}| - |LCP(o_i, o_{i-1})| ]
+
+    where o_i is the i-th full translation, LCP is the longest common prefix,
+    and J is the number of re-translations.
+
+    NE < 0.2 = low revision (< 1 token revised per 5 final tokens)
+
+    Args:
+        revision_history: List of full translation token ID lists, one per
+            re-translation step. Each entry is the complete translation at
+            that point (not just new tokens).
+
+    Returns:
+        NE score (0 = perfectly stable, higher = more revisions)
+    """
+    if len(revision_history) < 2:
+        return 0.0
+
+    total_erasure = 0.0
+    for i in range(1, len(revision_history)):
+        prev = revision_history[i - 1]
+        curr = revision_history[i]
+        # LCP length
+        lcp_len = 0
+        for j in range(min(len(prev), len(curr))):
+            if prev[j] == curr[j]:
+                lcp_len = j + 1
+            else:
+                break
+        erasure = len(prev) - lcp_len
+        total_erasure += erasure
+
+    # Normalize by number of revisions
+    return total_erasure / (len(revision_history) - 1)
+
+
+def compute_normalized_erasure_text(
+    revision_history: List[str],
+) -> float:
+    """NE metric for word-level revision history (text strings).
+
+    Same as compute_normalized_erasure but operates on word sequences.
+
+    Args:
+        revision_history: List of full translation strings, one per step.
+
+    Returns:
+        NE score (0 = perfectly stable)
+    """
+    if len(revision_history) < 2:
+        return 0.0
+
+    total_erasure = 0.0
+    for i in range(1, len(revision_history)):
+        prev_words = revision_history[i - 1].split()
+        curr_words = revision_history[i].split()
+        lcp_len = 0
+        for j in range(min(len(prev_words), len(curr_words))):
+            if prev_words[j] == curr_words[j]:
+                lcp_len = j + 1
+            else:
+                break
+        erasure = len(prev_words) - lcp_len
+        total_erasure += erasure
+
+    return total_erasure / (len(revision_history) - 1)
+
+
 def compute_bleu(hypothesis: str, reference: str) -> float:
     """Compute sentence-level BLEU using sacrebleu."""
     try:

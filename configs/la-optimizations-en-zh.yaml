@@ -1,0 +1,45 @@
+# Compare all LA optimization variants on EN-ZH
+# Tests: base LA, LA+SSBD(0.2), LA+dynamic-border, LA+SSBD+dynamic-border
+name: la-optimizations-en-zh
+backend:
+  backend_type: alignatt-la
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+variants:
+  - name: la-base
+    ssbd_beta: null
+    dynamic_border: false
+  - name: la-ssbd-0.2
+    ssbd_beta: 0.2
+    dynamic_border: false
+  - name: la-dynbd
+    ssbd_beta: null
+    dynamic_border: true
+  - name: la-ssbd-dynbd
+    ssbd_beta: 0.2
+    dynamic_border: true
+notes: >
+  Factorial comparison of LA optimizations.
+  Run manually:
+    # Base LA
+    python -m nllw.bench --backend alignatt-la --lang en-zh --comet --save
+    # LA + SSBD
+    python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --lang en-zh --comet --save
+    # LA + dynamic border
+    python -m nllw.bench --backend alignatt-la --dynamic-border --lang en-zh --comet --save
+    # LA + SSBD + dynamic border
+    python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --dynamic-border --lang en-zh --comet --save
+tags:
+  - comparison
+  - ssbd
+  - dynamic-border
+  - local-agreement
+  - en-zh
