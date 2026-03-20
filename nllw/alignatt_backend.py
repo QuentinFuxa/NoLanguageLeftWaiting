@@ -33,9 +33,11 @@ from . import llama_backend as ll
 from .alignatt import (
     aggregate_ts_weighted_vote,
     check_border,
+    check_border_dynamic,
     compute_entropy,
     is_target_language,
     load_head_config,
+    list_aggregation_methods,
 )
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
 from .backend_protocol import (
@@ -269,8 +271,19 @@ class AlignAttBackend(SimulMTBackend):
                     )
                     if attn is not None and src_end <= attn.shape[1]:
                         src_attn = attn[:, src_start:src_end]
-                        if check_border(src_attn, self._ts_scores,
-                                        num_src_tokens, self.config.border_distance):
+                        if self.config.dynamic_border:
+                            border_hit = check_border_dynamic(
+                                src_attn, self._ts_scores,
+                                num_src_tokens, self.config.border_distance,
+                                aggregation=self.config.aggregation,
+                            )
+                        else:
+                            border_hit = check_border(
+                                src_attn, self._ts_scores,
+                                num_src_tokens, self.config.border_distance,
+                                aggregation=self.config.aggregation,
+                            )
+                        if border_hit:
                             stopped_at_border = True
                             break
 

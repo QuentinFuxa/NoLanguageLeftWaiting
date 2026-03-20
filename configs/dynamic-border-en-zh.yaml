@@ -1,0 +1,30 @@
+# Dynamic border distance experiment: entropy-adaptive vs fixed
+# Novel approach: adjust border distance per-token based on attention entropy
+name: dynamic-border-en-zh
+backend:
+  type: alignatt
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Compare fixed border distance vs dynamic border distance on EN-ZH.
+  Dynamic BD adjusts per-token based on attention entropy:
+  - Sharp attention (low entropy) -> tighter border (more aggressive)
+  - Diffuse attention (high entropy) -> wider border (more conservative)
+  Run with:
+    # Fixed BD baseline
+    python -m nllw.bench --lang en-zh --border-distance 3 --comet --save
+    # Dynamic BD
+    python -m nllw.bench --lang en-zh --border-distance 3 --dynamic-border --comet --save
+  Hypothesis: dynamic BD improves quality on hard sentences while maintaining
+  low latency on easy sentences.
+tags:
+  - dynamic-border
+  - novel
+  - en-zh

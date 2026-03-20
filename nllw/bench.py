@@ -32,6 +32,7 @@ from .backend_protocol import BackendConfig, create_backend
 
 # Import backends to register them with the factory
 import nllw.alignatt_backend  # noqa: F401 -- registers alignatt, full-sentence, eager
+import nllw.alignatt_la_backend  # noqa: F401 -- registers alignatt-la
 import nllw.baselines  # noqa: F401 -- registers wait-k, fixed-rate
 
 
@@ -53,6 +54,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "ctx": "context_sentences",
         "topk": "top_k_heads",
         "entropy": "entropy_veto_threshold",
+        "agg": "aggregation",
+        "dynbd": "dynamic_border",
     }
 
     grid = {}
@@ -105,6 +108,8 @@ def run_benchmark(args):
         n_ctx=args.n_ctx,
         wait_k=args.wait_k,
         entropy_veto_threshold=args.entropy_threshold,
+        aggregation=args.aggregation,
+        dynamic_border=args.dynamic_border,
     )
 
     backend = create_backend(config)
@@ -237,6 +242,12 @@ def main():
     parser.add_argument("--wait-k", type=int, default=5, help="Wait-k words (for wait-k backend)")
     parser.add_argument("--entropy-threshold", type=float, default=None,
                         help="Entropy veto threshold (None=disabled)")
+    parser.add_argument("--aggregation", default="ts_vote",
+                        choices=["ts_vote", "softmax_mean", "entropy_weighted",
+                                 "consensus", "geomean", "top_p", "ensemble"],
+                        help="Attention aggregation method for border detection")
+    parser.add_argument("--dynamic-border", action="store_true",
+                        help="Enable entropy-based dynamic border distance")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")
