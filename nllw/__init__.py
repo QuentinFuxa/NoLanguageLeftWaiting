@@ -19,7 +19,12 @@ from .languages import (
 
 from .timed_text import TimedText
 
+# LLM-based SimulMT modules (lazy imports to avoid requiring llama.cpp)
+from .prompts import PromptFormat, build_prompt, get_format, list_formats
+from .metrics import LatencyMetrics, compute_latency_metrics
+
 __all__ = [
+    # NLLB backend (existing)
     "load_model",
     "OnlineTranslation",
     "TranslationModel",
@@ -35,4 +40,11 @@ __all__ = [
     "list_all_nllb_codes",
     "list_all_language_code_codes",
     "LANGUAGES",
+    # LLM-based SimulMT (new)
+    "PromptFormat",
+    "build_prompt",
+    "get_format",
+    "list_formats",
+    "LatencyMetrics",
+    "compute_latency_metrics",
 ]

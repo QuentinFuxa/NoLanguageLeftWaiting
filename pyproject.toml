@@ -16,6 +16,8 @@ keywords = [
     "machine-translation",
     "simultaneous-translation",
     "nllb",
+    "alignatt",
+    "llama-cpp",
     "streaming",
     "nlp",
     "transformers",
@@ -50,12 +52,29 @@ demo = [
     "bertviz>=1.4.1",
     "transformers>4.57"
 ]
+llm = [
+    "numpy>=1.20.0",
+]
+eval = [
+    "numpy>=1.20.0",
+    "datasets>=2.14.0",
+    "unbabel-comet>=2.0.0",
+]
+heads = [
+    "numpy>=1.20.0",
+    "datasets>=2.14.0",
+    "simalign>=0.4",
+    "matplotlib>=3.5.0",
+]
+dev = [
+    "pytest>=7.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/QuentinFuxa/NoLanguageLeftWaiting"
 
 [tool.setuptools]
-packages = ["nllw"]
+packages = ["nllw", "nllw.heads"]
 
 [tool.setuptools.package-data]
 nllw = ["py.typed"]
