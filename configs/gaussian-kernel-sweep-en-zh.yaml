@@ -1,0 +1,32 @@
+# Gaussian kernel consensus sweep: compare sigma values on EN-ZH
+# Novel research: unifies ts_vote (sigma->0) and softmax_mean (sigma->inf)
+name: gaussian-kernel-sweep-en-zh
+backend:
+  type: alignatt
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Two-part experiment:
+  1. Compare gaussian_kernel and gaussian_kernel_continuous against all other aggregation methods
+  2. Sigma tuning: test sigma=0.5,1.0,1.5,2.0,3.0 (requires config override, not sweepable yet)
+
+  Run with:
+  python -m nllw.bench --sweep "agg=ts_vote,gaussian_kernel,gaussian_kernel_continuous,entropy_weighted,geomean,ensemble" --lang en-zh --comet --save
+
+  Hypothesis: gaussian_kernel with sigma=1.5 provides better subword boundary tolerance
+  than ts_vote, especially on agglutinative targets (EN-ZH, EN-DE).
+  gaussian_kernel_continuous should be smoother but slower.
+tags:
+  - sweep
+  - gaussian_kernel
+  - aggregation
+  - novel
+  - en-zh

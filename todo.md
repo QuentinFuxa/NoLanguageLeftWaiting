@@ -65,6 +65,26 @@
 - [x] Display-only mask-k (`display_mask_k` param): hide last k unstable tokens from display while keeping as SSBD draft. SSBD paper shows NE drops from 1.01 to 0.53 with mask-3.
 - [x] 203 unit tests (31 new, all passing)
 
+## DONE -- Iteration 5: Gaussian Kernel + Forced Decoding + Adaptive SSBD
+
+- [x] **Gaussian Kernel Consensus** aggregation (2 variants):
+  - `gaussian_kernel`: Place Gaussian at each head's argmax, peak of TS-weighted density
+  - `gaussian_kernel_continuous`: Convolve full attention distributions with Gaussian kernel
+  - Sigma parameter: 0.5=near-argmax, 1.5=moderate, 3.0=wide blur
+  - Key advantage: subword boundary tolerance (nearby heads reinforce each other)
+  - Registered in `_BASE_AGGREGATION_METHODS`, usable in sweeps via `agg=gaussian_kernel`
+- [x] **LA Forced Decoding** (`la_forced_decode` config, `--forced-decode` CLI):
+  - Force-decode committed prefix tokens before generating new ones (CUNI approach)
+  - Conditions model on committed output (consistency) + fewer tokens to generate (speed)
+  - Strategy priority: SSBD > forced decoding > standard re-translation
+  - Sweep: `forced=0,1`
+- [x] **Adaptive SSBD Beta** (`adaptive_ssbd` config, `--adaptive-ssbd` CLI):
+  - Per-token entropy-based bias: confident=higher beta, uncertain=lower beta
+  - Combines SSBD (2509.21740) with entropy-modulated confidence (2508.15371)
+  - Scale: ent<=1.0 -> beta*1.5, ent>=4.0 -> beta*0.2, capped at 0.95
+  - Sweep: `adaptive=0,1`
+- [x] 244 unit tests (41 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -84,24 +104,28 @@
 - [ ] KV cache speedup measurement (with vs without)
 - [ ] Entropy veto threshold tuning (0.5, 0.75, 1.0)
 - [ ] Pareto frontier analysis: bd={2,3,4,5} x wb={1,2,3} x all directions
-- [ ] **Aggregation method sweep on A40**: `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p" --lang en-zh --comet --save` -- Novel research, no published baselines
-- [ ] **AlignAtt vs AlignAtt-LA comparison**: `python -m nllw.bench --compare alignatt alignatt-la --lang en-zh --comet --save` -- Measure output stability + latency tradeoff
-- [ ] **Cross-aggregation x direction**: Sweep all 6 aggregation methods across en-zh, en-de, en-it, cs-en
+- [ ] **Aggregation method sweep on A40** (now 9 methods): `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p,gaussian_kernel,gaussian_kernel_continuous,ensemble" --lang en-zh --comet --save`
+- [ ] **AlignAtt vs AlignAtt-LA comparison**: `python -m nllw.bench --compare alignatt alignatt-la --lang en-zh --comet --save`
+- [ ] **Cross-aggregation x direction**: Sweep all 9 aggregation methods across en-zh, en-de, en-it, cs-en
 - [ ] **Dynamic border distance test**: `python -m nllw.bench --lang en-zh --dynamic-border --comet --save` vs fixed bd=3
+- [ ] **Gaussian kernel sigma sweep**: `python -m nllw.bench --sweep "agg=gaussian_kernel" --lang en-zh --comet` (vary sigma via config)
+- [ ] **Forced decoding test**: `python -m nllw.bench --backend alignatt-la --forced-decode --lang en-zh --comet --save` -- speed & quality vs standard LA
+- [ ] **Adaptive SSBD sweep**: `python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --adaptive-ssbd --lang en-zh --comet --save` vs fixed beta
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
 ### High Priority (open research gaps, no published work)
-- [x] **Novel aggregation** (IMPLEMENTED): 6 methods -- softmax_mean, entropy_weighted, consensus, geomean, top_p. Sweepable via `--aggregation` or `agg=` in sweep spec. **Needs GPU testing.**
-- [x] **SSBD for alignatt-la** (IMPLEMENTED): Self-Speculative Biased Decoding (arxiv 2509.21740). 3-phase: batch verify draft -> biased acceptance -> autoregressive from divergence. `--ssbd-beta 0.2` or `ssbd=0.0,0.1,0.2` sweep. **Needs GPU testing.**
-- [x] **NE metric** (IMPLEMENTED): Normalized Erasure for output stability. `compute_normalized_erasure()` + revision history tracking in LA backend.
-- [ ] **LA forced decoding**: Force-decode committed prefix tokens before generating new ones (CUNI does this -- reduces computation)
-- [ ] **LA two-pass catch-up**: Run two re-translations per update (CUNI approach) for extra LA comparison opportunity
-- [x] **Attention entropy as dynamic border distance** (IMPLEMENTED): `--dynamic-border` flag, adjusts bd per-token based on attention entropy. **Needs GPU testing.**
-- [ ] **Aggregation sweep on GPU**: Run `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p" --lang en-zh --comet`
-- [ ] **SSBD sweep on GPU**: Run `python -m nllw.bench --backend alignatt-la --sweep "ssbd=0.0,0.1,0.2,0.3" --lang en-zh --comet --save`
-- [ ] **SSBD + mask-k sweep**: Run `python -m nllw.bench --backend alignatt-la --sweep "ssbd=0.0,0.2 mask=0,1,2,3" --lang en-zh --comet --save`
-- [ ] **Adaptive SSBD beta**: Per-token entropy-based bias (high entropy -> lower beta). Combine arxiv 2509.21740 + 2508.15371.
+- [x] **Novel aggregation** (IMPLEMENTED): 9 methods total -- ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble. **Needs GPU testing.**
+- [x] **SSBD for alignatt-la** (IMPLEMENTED): `--ssbd-beta 0.2` or `ssbd=0.0,0.1,0.2` sweep. **Needs GPU testing.**
+- [x] **NE metric** (IMPLEMENTED): `compute_normalized_erasure()` + revision history tracking.
+- [x] **LA forced decoding** (IMPLEMENTED): `--forced-decode` flag. Force-decode committed prefix. **Needs GPU testing.**
+- [x] **Adaptive SSBD beta** (IMPLEMENTED): `--adaptive-ssbd` flag. Per-token entropy-based bias. **Needs GPU testing.**
+- [x] **Attention entropy as dynamic border distance** (IMPLEMENTED): `--dynamic-border` flag. **Needs GPU testing.**
+- [x] **Gaussian kernel consensus** (IMPLEMENTED): 2 variants with sigma parameter. **Needs GPU testing.**
+- [ ] **LA two-pass catch-up**: Run two re-translations per update (CUNI approach) for extra LA comparison
+- [ ] **Aggregation sweep on GPU**: Run full 9-method sweep
+- [ ] **SSBD sweep on GPU**: `ssbd=0.0,0.1,0.2,0.3` x `adaptive=0,1`
+- [ ] **SSBD + mask-k sweep**: `ssbd=0.0,0.2 mask=0,1,2,3`
 
 ### Medium Priority (validated by SOTA papers)
 - [ ] Cross-lingual transfer of alignment heads (ICLR 2026 "Translation Heads" paper confirms heads are universal)
@@ -109,16 +133,21 @@
 - [ ] ExPosST-style position slot reservation (arxiv 2603.14903) for zero-recomputation KV cache
 - [ ] Dynamic word_batch based on source complexity (short sentences -> smaller wb)
 - [ ] **Adaptive Multi-Strategy (AMS)**: Auto-select aggregation based on input (entropy, agreement ratio)
-- [ ] **Gaussian kernel consensus**: Generalization of ts_vote and softmax_mean with single sigma param
 - [ ] **Per-head temperature normalization**: Learned during head detection, normalizes sharpness
+
+### Medium-High Priority (new from March 2026 SOTA survey)
+- [ ] **GRPO fine-tuning** (SeqPO-SiMT, arxiv 2505.20622): RL-optimize READ/WRITE decisions using BLEU/COMET reward. SimulMT results on 7B LLM rival offline translation.
+- [ ] **Syntax-aware chunking** (SASST, arxiv 2508.07781): Replace fixed word_batch with dependency-aware boundaries. Qwen3-8B: +1.2-3.2 BLEU.
+- [ ] **SSD parallel speculation** (arxiv 2603.03251): Extend SSBD to predict verification outcomes and pre-compute multiple draft continuations. Up to 2x over standard spec dec.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025, github.com/eit-nlp/streamingllm) as alternative to our KV cache approach
 - [ ] Evaluate SimulSense-style sense unit detection (arxiv 2509.21932) for chunking
 - [ ] OmniSTEval integration: end-to-end IWSLT eval pipeline
 - [ ] Human-like strategies: SENTENCE_CUT, DROP, PRONOMINALIZATION (arxiv 2601.11002)
-- [ ] **LSG KL-divergence policy** (arxiv 2501.00868): Training-free, uses KL(P_partial || P_full) for read/write decisions. Could complement AlignAtt but needs 2 forward passes.
+- [ ] **LSG KL-divergence policy** (arxiv 2501.00868): Training-free, uses KL(P_partial || P_full) for read/write decisions.
 - [ ] **Confidence-modulated speculative decoding** (arxiv 2508.15371): Dynamically adjust draft length based on entropy/margin uncertainty.
+- [ ] **SimulSA 1% activation** (arxiv 2509.15692): Minimal SimulMT examples needed to activate streaming capabilities when fine-tuning.
 
 ---
 
