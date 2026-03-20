@@ -186,6 +186,37 @@
   - `--complexity-adaptive` CLI flag, `cmplx=0,1` sweep shortname
 - [x] 396 unit tests (36 new, all passing)
 
+## DONE -- Iteration 9: Cross-Step Border Signals (REINA + Prediction Stability)
+
+- [x] **Entropy change tracking** (`entropy_change_threshold` config, `--entropy-change` CLI):
+  - REINA-inspired (arxiv 2508.04946, AAAI 2026 Oral): track generation entropy across translate() calls
+  - If adding a new source word reduces entropy significantly (delta < threshold), the model is still learning from source -> inhibit border stop (READ more)
+  - If entropy change is small or positive, source is exhausted -> allow border stop (WRITE)
+  - `compute_entropy_change()` in alignatt.py: returns (delta, current_entropy)
+  - `entropy_change_supports_write()`: interpret delta as READ/WRITE signal
+  - Integrated as pre-filter in `check_border_combined()` (fires before attention checks)
+  - Wired into both AlignAtt and AlignAtt-LA backends (all 3 retranslation methods)
+  - `--entropy-change -0.5` CLI flag, `entchg=-0.5,-1.0,-2.0` sweep shortname
+  - Zero overhead: reuses existing logits from generation position
+- [x] **Prediction stability index** (`prediction_stability` config, `--prediction-stability` CLI):
+  - Novel: no published work on cross-step prediction stability for SimulMT border detection
+  - Track how model's top predictions change between consecutive translate() calls
+  - Two metrics: top-1 rank stability (rank of prev top-1 in current dist) + top-K Jaccard overlap
+  - `compute_prediction_stability()`: returns (top1_rank_change, topk_overlap)
+  - `prediction_stability_supports_write()`: interpret as READ/WRITE signal
+  - Stable predictions (rank <= 3, overlap >= 0.4) = WRITE (enough source context)
+  - Volatile predictions = READ (model still adapting to new source info)
+  - Integrated as post-filter in `check_border_combined()` (fires after attention checks)
+  - `--prediction-stability` CLI flag, `predstab=0,1` sweep shortname
+  - Overhead: one logits copy per translate() call
+- [x] **Cross-step signal architecture**:
+  - Both signals computed BEFORE generation loop (once per translate() call)
+  - Stored as instance variables, consumed by `_check_border()` / `check_border_combined()`
+  - State reset on segment boundary (_handle_segment_end / _init_segment)
+  - Orthogonal to all attention-based signals (entropy change = output-space, stability = prediction-space)
+  - `use_combined` condition extended to trigger on any multi-signal feature
+- [x] 441 unit tests (45 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -232,6 +263,13 @@
 - [ ] **Complexity-adaptive test**: `python -m nllw.bench --complexity-adaptive --lang en-zh --comet --save` vs fixed bd/wb
 - [ ] **Complexity + LSG combined**: `python -m nllw.bench --complexity-adaptive --lsg-kl 7.0 --lang en-zh --comet --save`
 - [ ] **Complexity + dynamic-wb combined**: `python -m nllw.bench --complexity-adaptive --dynamic-wb --lang en-zh --comet --save`
+- [ ] **REINA entropy change sweep**: `python -m nllw.bench --sweep "entchg=-0.3,-0.5,-1.0,-2.0" --lang en-zh --comet --save`
+- [ ] **Prediction stability test**: `python -m nllw.bench --prediction-stability --lang en-zh --comet --save` vs baseline
+- [ ] **REINA + stability combined**: `python -m nllw.bench --entropy-change -0.5 --prediction-stability --lang en-zh --comet --save`
+- [ ] **REINA + shift-k combined**: `python -m nllw.bench --entropy-change -0.5 --shift-k 0.4 --lang en-zh --comet --save`
+- [ ] **REINA + LSG combined**: `python -m nllw.bench --entropy-change -0.5 --lsg-kl 7.0 --lang en-zh --comet --save`
+- [ ] **Full iteration 9 sweep**: `python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1 shiftk=0.4" --lang en-zh --comet --save`
+- [ ] **All cross-step signals**: `python -m nllw.bench --entropy-change -0.5 --prediction-stability --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save`
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
@@ -266,7 +304,7 @@
 
 ### NEW High Priority (Iteration 6 SOTA survey, see docs/research/sota-simulmt-2026.md)
 - [ ] **Group Position Encoding** (arxiv 2505.16983, ACL 2025): Separate position IDs for source/target. **Requires LoRA fine-tuning** (NOT zero-shot despite claims). Key finding: position mismatch is negligible (<0.14 BLEU) -- validates our KV cache approach. See `docs/research/gpe-exposst-analysis.md`.
-- [ ] **REINA information gain policy** (arxiv 2508.04946, AAAI 2026 Oral): Principled entropy-based READ/WRITE. Extends our entropy_veto_threshold with info-theoretic grounding. 21% latency/quality improvement.
+- [x] **REINA-inspired entropy change** (IMPLEMENTED, iteration 9): Cross-step entropy change tracking. `--entropy-change -0.5`. Extends REINA info gain (arxiv 2508.04946) with output-space entropy delta. **Needs GPU testing.**
 - [ ] **AliBaStr-MT learned border** (arxiv 2503.22051, Apple): Train 6M-param classifier on our TS alignment data. Tunable delta threshold at inference. Replaces heuristic border_distance.
 - [ ] **DrFrattn attention-based policy** (EMNLP 2025): Closest published work to our AlignAtt. "Shift-k" mechanism for adaptive thresholds -- must read.
 - [ ] **StreamingThinker parallel KV** (arxiv 2510.17238, ICLR 2026): Parallel KV caches decouple source encoding from generation. 80% pre-reasoning latency reduction.
@@ -292,6 +330,22 @@
 - [ ] **RASST retrieval** (arxiv 2601.22777): Retrieval-augmented SimulMT for IWSLT 2026 "Extra Context" subtrack. +3 BLEU, +16% terminology.
 - [ ] **PEARL pre-verify** (arxiv 2408.11850, ICLR 2025): Pre-verify first draft token during drafting phase. Extend SSBD pipeline.
 - [ ] **Nightjar MAB** (arxiv 2512.22420): Multi-armed bandit to decide whether to use SSBD at all per sentence.
+
+### NEW Iteration 9 Research Findings
+
+- [ ] **Hibiki-Zero GRPO** (arxiv 2602.11072, Feb 2026): Training-free SimulST using GRPO to optimize latency without quality loss. Kyutai team. If training resources become available, most promising RL direction.
+- [ ] **ExPosST position slot pre-allocation** (arxiv 2603.14903, March 2026): Pre-allocate KV positions for incoming source tokens, zero recomputation. SOTA results with Llama-3.1-8B. Requires fine-tuning but could eliminate our KV cache overhead.
+- [ ] **EASiST end-to-end SimulST** (arxiv 2504.11809): End-to-end approach with explicit attention to synchronize speech and text. Different from our cascaded approach.
+- [ ] **SimulS2S-LLM** (arxiv 2504.15509): Speech-to-speech simultaneous translation with LLMs.
+- [x] **Translation Heads paper** (OpenReview 2025): Validates our head detection approach -- alignment heads are universal, sparse, cross-lingually consistent. Already confirmed by our `head_transfer.py` results.
+
+### Unported from iwslt26-sst (see audit)
+
+- [ ] **Async ASR-MT pipeline** (`cascade/async_cascade.py`, 725 lines): Full end-to-end pipeline with ASR integration. Important for final system.
+- [ ] **Compute-aware latency metrics** (CA-AL, CA-YAAL): Formulas in `research.py` but not wired through bench.py or backends.
+- [ ] **LoRA training framework** (`lora/train_lora.py`, 248 lines): Required for ExPosST, AliBaStr, and other fine-tuning approaches.
+- [ ] **Per-talk latency variance analysis**: HY-MT has lower latency variance than Qwen3.5 (more stable).
+- [ ] **Speech segmentation for long talks**: Pre-process ACL6060 talks into evaluation segments.
 
 ---
 

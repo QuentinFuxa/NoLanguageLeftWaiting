@@ -38,10 +38,14 @@ from .alignatt import (
     check_border_shift_k,
     compute_dynamic_word_batch,
     compute_entropy,
+    compute_entropy_change,
     compute_logit_kl,
+    compute_prediction_stability,
+    entropy_change_supports_write,
     is_target_language,
     load_head_config,
     list_aggregation_methods,
+    prediction_stability_supports_write,
 )
 from .complexity import adaptive_params_from_complexity
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
@@ -168,6 +172,11 @@ class AlignAttBackend(SimulMTBackend):
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
         self._prev_step_attn: Optional[np.ndarray] = None  # For info gain
+        # Cross-step tracking for REINA entropy change + prediction stability
+        self._prev_first_token_entropy: Optional[float] = None
+        self._prev_first_token_logits: Optional[np.ndarray] = None
+        self._current_entropy_change: Optional[float] = None
+        self._current_pred_stability_write: Optional[bool] = None
 
     def translate(self, source_word: str, is_final: bool = False,
                   emission_time: float = 0.0) -> TranslationStep:
@@ -266,6 +275,28 @@ class AlignAttBackend(SimulMTBackend):
 
             pos = diverge_pos + total_new
 
+            # Cross-step signals: compute BEFORE generation loop
+            # These measure how the model's state changed after adding the new source word
+            use_entropy_change = self.config.entropy_change_threshold is not None
+            use_pred_stability = self.config.prediction_stability
+            if use_entropy_change or use_pred_stability:
+                first_logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                if first_logits is not None:
+                    if use_entropy_change:
+                        delta_h, cur_h = compute_entropy_change(
+                            first_logits, self._prev_first_token_entropy
+                        )
+                        self._current_entropy_change = delta_h
+                        self._prev_first_token_entropy = cur_h
+                    if use_pred_stability:
+                        top1_rank, topk_ovl = compute_prediction_stability(
+                            first_logits, self._prev_first_token_logits
+                        )
+                        self._current_pred_stability_write = (
+                            prediction_stability_supports_write(top1_rank, topk_ovl)
+                        )
+                        self._prev_first_token_logits = first_logits.copy()
+
             # Generate tokens
             new_ids = []
             stopped_at_border = False
@@ -300,10 +331,12 @@ class AlignAttBackend(SimulMTBackend):
                     if attn is not None and src_end <= attn.shape[1]:
                         src_attn = attn[:, src_start:src_end]
 
-                        # Use combined check if shift-k or info-gain enabled
+                        # Use combined check if any multi-signal feature enabled
                         use_combined = (
                             self.config.shift_k_threshold is not None
                             or self.config.info_gain_threshold is not None
+                            or self.config.entropy_change_threshold is not None
+                            or self.config.prediction_stability
                         )
                         if use_combined:
                             border_hit, _, _ = check_border_combined(
@@ -317,6 +350,9 @@ class AlignAttBackend(SimulMTBackend):
                                 prev_attn=self._prev_step_attn,
                                 info_gain_threshold=self.config.info_gain_threshold,
                                 dynamic_border=self.config.dynamic_border,
+                                entropy_change=self._current_entropy_change,
+                                entropy_change_threshold=self.config.entropy_change_threshold,
+                                pred_stability_write=self._current_pred_stability_write,
                             )
                             self._prev_step_attn = src_attn.copy()
                         elif self.config.dynamic_border:
@@ -487,6 +523,11 @@ class AlignAttBackend(SimulMTBackend):
         ll.decode_batch_at(self._ctx, self._prefix_tokens, pos_start=0)
         self._prev_source_tokens = []
         self._prev_step_attn = None
+        # Reset cross-step tracking for new segment
+        self._prev_first_token_entropy = None
+        self._prev_first_token_logits = None
+        self._current_entropy_change = None
+        self._current_pred_stability_write = None
 
     def _handle_segment_end(self):
         """Handle end of a sentence segment."""
