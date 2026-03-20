@@ -1,23 +1,40 @@
 # SOTA SimulMT Research (2025-2026)
 
-Research compiled 2026-03-20 for IWSLT 2026 submission preparation.
+Research compiled 2026-03-20, updated with March 2026 findings.
 
 ---
 
 ## IWSLT 2026 Simultaneous Track
 
-- **Primary latency metric**: LongYAAL (via OmniSTEval)
-- **Quality metric**: XCOMET-XL primary, SacreBLEU/chrF secondary
-- **Hardware constraint**: Single H100 80GB
-- **Data condition**: Any open-weight model with permissive license
+- **Primary latency metric**: Non-computation-aware LongYAAL (via OmniSTEval)
+- **Secondary latency**: StreamLAAL for year-over-year consistency
+- **Quality metric**: COMET (primary), plus chrF, BLEURT. XCOMET-XL for internal eval.
+- **Hardware constraint**: Single H100 80GB, Docker submission preferred
+- **Data condition**: "Constrained with LLMs" -- any open-weight model with permissive license
+- **Two tracks**: Standard S2T and S2T with Extra Context (ACL paper PDFs)
+- **Language pairs**: En-De, En-Zh, En-It, Cs-En
 - **Official baselines repo**: https://github.com/owaski/iwslt-2026-baselines
+  - Cascade: Qwen3-ASR-1.7B -> Qwen3-4B-Instruct-2507
+  - NER via Qwen3-30B-A3B-Instruct-2507-FP8 (vLLM)
+  - Alignment: Qwen3-ForcedAligner-0.6B
+  - Context consistently improves quality across all language pairs
+  - **Note**: Baseline uses Qwen3-4B which we know is inferior to HY-MT
 
-### IWSLT 2025 Winner: CUNI/SimulStreaming
+### IWSLT 2025 Winner: CUNI/SimulStreaming (direct competitor)
 
-- Architecture: Whisper (ASR) + EuroLLM (cascade MT)
-- Policies: AlignAtt for Whisper, LocalAgreement for EuroLLM
-- Won highest COMET in CS-EN (2s/4s), EN-DE/ZH/JA (4-5s)
-- +2 BLEU on CS-EN, +13-22 BLEU on EN-DE/ZH/JA vs baselines
+- Architecture: Whisper large-v3 (AlignAtt) + EuroLLM-9B-Instruct (LocalAgreement)
+- **Forced decoding** of stable hypothesis prefix into KV cache (we implement this)
+- Context buffer: max 300-500 tokens, trimmed from beginning
+- **Scores**: En-Zh 46.44 BLEU, En-De 38.46 BLEU, Cs-En 18.83 BLEU
+- StreamLAAL: 2630-3934ms
+- Domain-specific prompting, beam search (5 beams for Cs-En)
+- Buffer trimming: sentence-level for German, segment-level for Zh/Ja
+
+### CMU IWSLT 2025 System
+
+- Wav2Vec 2.0 + Qwen2.5-7B-Instruct
+- RoPE in speech encoder, sliding window KV cache (1K tokens)
+- En-Zh: 44.3 BLEU / 2.189s, En-De: 25.1 BLEU / 1.689s
 - Code: https://github.com/ufal/SimulStreaming
 - Paper: https://arxiv.org/abs/2506.17077
 

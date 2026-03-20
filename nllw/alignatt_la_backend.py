@@ -43,9 +43,11 @@ from .alignatt import (
     check_border_dynamic,
     compute_dynamic_word_batch,
     compute_entropy,
+    compute_logit_kl,
     is_target_language,
     load_head_config,
 )
+from .complexity import adaptive_params_from_complexity
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
 from .backend_protocol import (
     SimulMTBackend,
@@ -288,11 +290,22 @@ class AlignAttLABackend(SimulMTBackend):
             self._source_words.append(source_word)
             self._batch_counter += 1
 
-            # Dynamic or fixed word batching
+            # Effective parameters (may be overridden by complexity)
             effective_wb = self.config.word_batch
+            self._effective_bd = self.config.border_distance
+            accumulated = " ".join(self._source_words)
+            if self.config.complexity_adaptive and len(self._source_words) >= 3:
+                self._effective_bd, effective_wb, _ = adaptive_params_from_complexity(
+                    accumulated,
+                    base_bd=self.config.border_distance,
+                    base_wb=self.config.word_batch,
+                    base_gen_cap=self.config.max_new_per_step,
+                )
+
+            # Dynamic word batching (applied on top of complexity)
             if self.config.dynamic_word_batch:
                 effective_wb = compute_dynamic_word_batch(
-                    self.config.word_batch, len(self._source_words)
+                    effective_wb, len(self._source_words)
                 )
 
             # Word batching
@@ -345,6 +358,7 @@ class AlignAttLABackend(SimulMTBackend):
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
         """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain)."""
+        bd = getattr(self, '_effective_bd', self.config.border_distance)
         # Use combined check if shift-k or info-gain enabled
         use_combined = (
             self.config.shift_k_threshold is not None
@@ -353,7 +367,7 @@ class AlignAttLABackend(SimulMTBackend):
         if use_combined:
             hit, _, _ = check_border_combined(
                 src_attn, self._ts_scores,
-                num_src_tokens, self.config.border_distance,
+                num_src_tokens, bd,
                 aggregation=self.config.aggregation,
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
@@ -369,7 +383,7 @@ class AlignAttLABackend(SimulMTBackend):
         if self.config.dynamic_border:
             return check_border_dynamic(
                 src_attn, self._ts_scores,
-                num_src_tokens, self.config.border_distance,
+                num_src_tokens, bd,
                 aggregation=self.config.aggregation,
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
@@ -378,12 +392,46 @@ class AlignAttLABackend(SimulMTBackend):
         else:
             return check_border(
                 src_attn, self._ts_scores,
-                num_src_tokens, self.config.border_distance,
+                num_src_tokens, bd,
                 aggregation=self.config.aggregation,
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
                 head_temp_reference=self.config.head_temp_reference,
             )
+
+    def _lsg_probe(self, last_token: int, pos: int,
+                   src_end: int) -> Optional[float]:
+        """LSG logit KL probe via KV cache fork (same logic as AlignAttBackend).
+
+        Forks the KV cache, removes last K source tokens, re-decodes the last
+        generated token, and compares output logit distributions.
+
+        Returns KL divergence or None on failure.
+        """
+        prefix_len = len(self._prefix_tokens)
+        lsg_k = min(self.config.lsg_k, src_end - prefix_len)
+        if lsg_k <= 0:
+            return None
+
+        logits_full = ll.get_logits_array(self._ctx, -1, self._nv)
+        if logits_full is None:
+            return None
+
+        ll.memory_seq_cp(self._mem, 0, 1, 0, pos)
+        try:
+            ll.memory_seq_rm(self._mem, 1, src_end - lsg_k, src_end)
+            ll.memory_seq_rm(self._mem, 1, pos - 1, pos)
+            ret = ll.decode_single_at(
+                self._ctx, last_token, pos - 1, seq_id=1, output=True
+            )
+            if ret != 0:
+                return None
+            logits_reduced = ll.get_logits_array(self._ctx, 0, self._nv)
+            if logits_reduced is None:
+                return None
+            return compute_logit_kl(logits_full, logits_reduced)
+        finally:
+            ll.memory_seq_rm(self._mem, 1, 0, -1)
 
     def _retranslate(self, is_final: bool) -> List[int]:
         """Re-translate the full source using AlignAtt.
@@ -477,6 +525,14 @@ class AlignAttLABackend(SimulMTBackend):
                     if border_hit:
                         consecutive_border_hits += 1
                         if consecutive_border_hits >= self.config.border_confirm:
+                            # LSG confirmation
+                            if self.config.lsg_kl_threshold is not None:
+                                lsg_kl = self._lsg_probe(next_tok, pos, src_end)
+                                if (lsg_kl is not None
+                                        and lsg_kl > self.config.lsg_kl_threshold):
+                                    consecutive_border_hits = 0
+                                    gen_ids.append(next_tok)
+                                    continue
                             gen_ids.append(next_tok)
                             break
                     else:
@@ -565,6 +621,14 @@ class AlignAttLABackend(SimulMTBackend):
                     if border_hit:
                         consecutive_border_hits += 1
                         if consecutive_border_hits >= self.config.border_confirm:
+                            # LSG confirmation
+                            if self.config.lsg_kl_threshold is not None:
+                                lsg_kl = self._lsg_probe(next_tok, pos, src_end)
+                                if (lsg_kl is not None
+                                        and lsg_kl > self.config.lsg_kl_threshold):
+                                    consecutive_border_hits = 0
+                                    gen_ids.append(next_tok)
+                                    continue
                             gen_ids.append(next_tok)
                             break
                     else:
@@ -714,6 +778,14 @@ class AlignAttLABackend(SimulMTBackend):
                     if border_hit:
                         consecutive_border_hits += 1
                         if consecutive_border_hits >= self.config.border_confirm:
+                            # LSG confirmation
+                            if self.config.lsg_kl_threshold is not None:
+                                lsg_kl = self._lsg_probe(next_tok, pos, src_end)
+                                if (lsg_kl is not None
+                                        and lsg_kl > self.config.lsg_kl_threshold):
+                                    consecutive_border_hits = 0
+                                    gen_ids.append(next_tok)
+                                    continue
                             gen_ids.append(next_tok)
                             break
                     else:
