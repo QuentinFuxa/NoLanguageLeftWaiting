@@ -147,6 +147,14 @@ class BackendConfig:
     # source word. Large shift = consuming source (WRITE). Small = stuck (READ).
     # False=disabled, True=enabled.
     attention_shift: bool = False
+    # Signal fusion mode: replace boolean cascade with weighted scoring.
+    # When enabled, all signals produce continuous scores in [-1, +1] and
+    # a weighted sum determines the border decision. Per-direction tunable.
+    # False=disabled (use check_border_combined), True=use fused_border_check.
+    signal_fusion: bool = False
+    # Fusion decision threshold: fusion_score >= threshold -> WRITE (border hit).
+    # 0.0 = balanced, positive = more conservative (fewer WRITE), negative = aggressive.
+    fusion_threshold: float = 0.0
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

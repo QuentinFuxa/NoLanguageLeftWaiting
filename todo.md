@@ -286,6 +286,39 @@
 - [x] **IWSLT 2026 configs**: Per-direction YAML configs (en-zh, en-de, en-it, cs-en)
 - [x] 581 unit tests (86 new, all passing)
 
+## DONE -- Iteration 12: Weighted Signal Fusion Framework
+
+- [x] **Signal fusion framework** (`nllw/fusion.py`, ~600 lines):
+  - Novel: no published work on weighted multi-signal fusion for SimulMT border detection
+  - Replaces boolean cascade (`check_border_combined()`) with weighted scoring
+  - Each of 8 signals produces a continuous score in [-1, +1]:
+    - `score_standard_border()`: AlignAtt argmax position (foundation)
+    - `score_shift_k()`: Border mass (DrFrattn-inspired)
+    - `score_info_gain()`: Attention KL divergence
+    - `score_coverage()`: Source coverage (hallucination guard)
+    - `score_monotonicity()`: Attention movement regularity
+    - `score_entropy_change()`: REINA entropy delta
+    - `score_pred_stability()`: Prediction stability (novel)
+    - `score_attn_shift()`: Attention position shift (novel)
+  - `FusionWeights` dataclass: per-signal weights, per-direction defaults
+  - `fused_border_check()`: weighted sum -> threshold decision
+  - `FusionDiagnostic`: per-signal breakdown, dominant signal, summary
+  - `calibrate_threshold()`: find optimal threshold from labeled examples
+  - `grid_search_weights()`: optimize weights via grid search + F1
+  - `DIRECTION_WEIGHTS`: pre-configured weight profiles (en-zh, en-de, en-it, cs-en, en-fr)
+  - Key advantage: weak signals combine (two marginal signals trigger stops neither would alone)
+  - Normalized scoring: scale-independent (doubling weights doesn't change decision)
+  - Wired into AlignAtt backend (main generation loop) + LA backend (`_check_border()`)
+  - `--signal-fusion` CLI flag, `fusion=0,1` sweep shortname
+  - `--fusion-threshold` CLI flag, `fthr=-0.2,0.0,0.2` sweep shortname
+  - **Needs GPU testing** to compare vs boolean cascade
+- [x] **GPU experiment runner** (`scripts/run_experiments.sh`):
+  - 4 phases: basic validation, signal sweeps, Pareto sweep, fusion experiments
+  - Machine-aware: A40 (all), L4 (cheap/parallel)
+  - Auto-logging to results/ directory
+  - Fusion-specific Phase 4: fusion vs cascade head-to-head
+- [x] 653 unit tests (72 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -362,6 +395,13 @@
 - [ ] **Attention shift + entropy combined**: `python -m nllw.bench --attention-shift --entropy-change -0.5 --lang en-zh --comet --save`
 - [ ] **All cross-step signals (iter 9+11)**: `python -m nllw.bench --entropy-change -0.5 --prediction-stability --attention-shift --lang en-zh --comet --save`
 - [ ] **SimulStream E2E test**: `python -m nllw.simulstream --model /path/to/model.gguf --lang en-zh --test`
+- [ ] **Fusion: standard only**: `python -m nllw.bench --signal-fusion --lang en-zh --comet --save`
+- [ ] **Fusion: all signals**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --entropy-change -0.5 --prediction-stability --attention-monotonicity --attention-shift --lang en-zh --comet --save`
+- [ ] **Fusion threshold sweep**: `python -m nllw.bench --signal-fusion --sweep "fthr=-0.2,0.0,0.2,0.4" --lang en-zh --comet --save`
+- [ ] **Fusion vs cascade head-to-head**: compare `--signal-fusion --shift-k 0.4 --coverage-threshold 0.3` vs `--shift-k 0.4 --coverage-threshold 0.3` (same signals, different decision logic)
+- [ ] **Fusion per direction**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Fusion + LSG**: `python -m nllw.bench --signal-fusion --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save`
+- [ ] **GPU experiment runner**: `./scripts/run_experiments.sh 1 --lang en-zh --model /path/to/model.gguf --comet` (Phase 1 validation)
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
@@ -416,6 +456,14 @@
 - [ ] **Translation Mechanism of LLMs** (arxiv 2502.11806, Feb 2026): Only <5% of heads matter for translation. Fine-tuning 64 heads matches full fine-tuning. Confirms our sparse head detection is correct. Could prune alignment head set further.
 - [ ] **Hibiki-Zero GRPO for latency** (arxiv 2602.11072, Feb 2026): Kyutai 3B model uses GRPO RL to optimize latency. SOTA on 5 X-to-EN tasks. If training resources available, promising RL direction.
 - [x] **Translation Heads (ICLR 2026)**: Validates our head_transfer.py results -- alignment heads are universal, sparse, cross-lingually consistent, and causal. >97% TS mass transfer confirmed independently.
+
+### NEW Iteration 12 Research Agent Findings (March 2026)
+- [x] **Multi-signal fusion is novel** (confirmed): No papers found on weighted multi-signal fusion for SimulMT border detection. Our `fusion.py` fills an open gap.
+- [ ] **Hallucination detector aggregation** (arxiv 2402.13331): Different hallucination detectors are complementary. Aggregating n-gram repetition + source contribution + CometKiwi significantly improves detection. Validates our combined signal approach.
+- [ ] **CUNI IWSLT 2025 winner** (arxiv 2506.17077): Used AlignAtt + LocalAgreement + forced decoding + Whisper. Our system directly extends their winning approach with 8+ additional signals.
+- [ ] **IWSLT 2026 baselines available**: [github.com/owaski/iwslt-2026-baselines](https://github.com/owaski/iwslt-2026-baselines) -- Qwen3-ASR-1.7B + Qwen3-4B-Instruct-2507. We should significantly outperform.
+- [ ] **CMU IWSLT 2025 system** (arxiv 2506.13143): Qwen2.5-7B with specialized KV cache management. Relevant for our Qwen3.5 support.
+- [ ] **Conversational SimulMT** (arxiv 2402.10552, IWSLT 2025): Frames SimulMT as multi-turn conversation for full KV cache reuse. Could restructure our prompts to maximize cache hit rate.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025) -- needs LoRA fine-tuning. Position mismatch validated as negligible. See analysis.

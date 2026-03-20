@@ -77,6 +77,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "mono": "attention_monotonicity",
         "rep": "repetition_max_repeats",
         "attshift": "attention_shift",
+        "fusion": "signal_fusion",
+        "fthr": "fusion_threshold",
     }
 
     grid = {}
@@ -139,6 +141,8 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "attention_monotonicity": args.attention_monotonicity,
         "repetition_max_repeats": args.repetition_halt,
         "attention_shift": args.attention_shift,
+        "signal_fusion": args.signal_fusion,
+        "fusion_threshold": args.fusion_threshold,
     }
 
 
@@ -329,6 +333,10 @@ def main():
                         help="N-gram repetition halt threshold (2=recommended, None=disabled)")
     parser.add_argument("--attention-shift", action="store_true",
                         help="Enable cross-step attention shift tracking")
+    parser.add_argument("--signal-fusion", action="store_true",
+                        help="Enable weighted signal fusion (replaces boolean cascade)")
+    parser.add_argument("--fusion-threshold", type=float, default=0.0,
+                        help="Fusion decision threshold (0.0=balanced)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")
