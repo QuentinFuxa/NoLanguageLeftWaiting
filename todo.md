@@ -36,9 +36,19 @@
 - [x] 4 experiment configs in `configs/` (baseline, sweep, compare, entropy)
 - [x] 115 unit tests (all passing)
 
-## TODO -- Additional Backends
+## DONE -- Iteration 3: LA Backend + Novel Aggregation
 
-- [ ] `nllw/alignatt_la_backend.py` -- LocalAgreement hybrid (re-translate + diff for stability)
+- [x] `nllw/alignatt_la_backend.py` -- LocalAgreement + AlignAtt hybrid (re-translate, diff, commit stable prefix)
+- [x] 6 novel aggregation methods in `alignatt.py`: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p
+- [x] `aggregation` parameter in BackendConfig + wired into AlignAttBackend and AlignAttLABackend
+- [x] `--aggregation` CLI flag in bench.py + `agg` shortname in sweep parser
+- [x] `alignatt-la` backend registered in factory, auto-imported by bench.py
+- [x] 2 new experiment configs: `sweep-aggregation-en-zh.yaml`, `compare-la-en-zh.yaml`
+- [x] Attention entropy-based dynamic border distance (`check_border_dynamic`, `dynamic_border_distance`)
+- [x] `--dynamic-border` CLI flag + `dynbd` sweep shortname
+- [x] Ensemble aggregation method (weighted average of multiple strategies)
+- [x] 7 experiment configs in `configs/` (3 new: aggregation sweep, LA comparison, dynamic border)
+- [x] 172 unit tests (57 new, all passing)
 
 ## TODO -- Infrastructure
 
@@ -55,19 +65,29 @@
 - [ ] KV cache speedup measurement (with vs without)
 - [ ] Entropy veto threshold tuning (0.5, 0.75, 1.0)
 - [ ] Pareto frontier analysis: bd={2,3,4,5} x wb={1,2,3} x all directions
+- [ ] **Aggregation method sweep on A40**: `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p" --lang en-zh --comet --save` -- Novel research, no published baselines
+- [ ] **AlignAtt vs AlignAtt-LA comparison**: `python -m nllw.bench --compare alignatt alignatt-la --lang en-zh --comet --save` -- Measure output stability + latency tradeoff
+- [ ] **Cross-aggregation x direction**: Sweep all 6 aggregation methods across en-zh, en-de, en-it, cs-en
+- [ ] **Dynamic border distance test**: `python -m nllw.bench --lang en-zh --dynamic-border --comet --save` vs fixed bd=3
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
 ### High Priority (open research gaps, no published work)
-- [ ] **Novel aggregation**: softmax over source positions, entropy-weighted voting, temperature scaling across heads (no existing work on this -- novel contribution)
-- [ ] **SSBD for alignatt-la**: Self-Speculative Biased Decoding (arxiv 2509.21740) to accelerate re-translation. Reuse previous translation as speculative draft
-- [ ] **Attention entropy as dynamic border distance**: uncertain -> wider border, confident -> tighter border
+- [x] **Novel aggregation** (IMPLEMENTED): 6 methods -- softmax_mean, entropy_weighted, consensus, geomean, top_p. Sweepable via `--aggregation` or `agg=` in sweep spec. **Needs GPU testing.**
+- [ ] **SSBD for alignatt-la** (HIGH VALUE, 1.3-1.7x speedup expected): Self-Speculative Biased Decoding (arxiv 2509.21740). Feed previous translation as draft, verify in one parallel forward pass, resume autoregressive only from first divergence. Beta=0.2 recommended. Zero quality loss.
+- [ ] **LA forced decoding**: Force-decode committed prefix tokens before generating new ones (CUNI does this -- reduces computation)
+- [ ] **LA two-pass catch-up**: Run two re-translations per update (CUNI approach) for extra LA comparison opportunity
+- [x] **Attention entropy as dynamic border distance** (IMPLEMENTED): `--dynamic-border` flag, adjusts bd per-token based on attention entropy. **Needs GPU testing.**
+- [ ] **Aggregation sweep on GPU**: Run `python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p" --lang en-zh --comet`
 
 ### Medium Priority (validated by SOTA papers)
 - [ ] Cross-lingual transfer of alignment heads (ICLR 2026 "Translation Heads" paper confirms heads are universal)
-- [ ] Investigate LocalAgreement + AlignAtt hybrid (CUNI IWSLT 2025 winner used both)
+- [x] **LocalAgreement + AlignAtt hybrid** (IMPLEMENTED): `alignatt-la` backend. **Needs GPU testing.**
 - [ ] ExPosST-style position slot reservation (arxiv 2603.14903) for zero-recomputation KV cache
 - [ ] Dynamic word_batch based on source complexity (short sentences -> smaller wb)
+- [ ] **Adaptive Multi-Strategy (AMS)**: Auto-select aggregation based on input (entropy, agreement ratio)
+- [ ] **Gaussian kernel consensus**: Generalization of ts_vote and softmax_mean with single sigma param
+- [ ] **Per-head temperature normalization**: Learned during head detection, normalizes sharpness
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025, github.com/eit-nlp/streamingllm) as alternative to our KV cache approach
