@@ -1,0 +1,29 @@
+# SSBD (Self-Speculative Biased Decoding) sweep for AlignAtt-LA backend
+# Tests different bias values to find optimal speed/quality tradeoff
+# Expected: 1.3-1.7x speedup with zero quality loss at beta=0.2
+name: ssbd-sweep-en-zh
+backend:
+  backend_type: alignatt-la
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+sweep:
+  ssbd_beta: [0.0, 0.1, 0.2, 0.3, 0.4]
+notes: >
+  SSBD sweep: beta=0.0 is pure speculative (no bias, only accept argmax match),
+  beta=0.2 is recommended (biased acceptance, ~75% threshold).
+  Higher beta = more lenient = faster but potentially lower quality.
+  Run with: python -m nllw.bench --backend alignatt-la --sweep "ssbd=0.0,0.1,0.2,0.3,0.4" --lang en-zh --comet --save
+  Key metrics to watch: generation_time_ms (speed), COMET (quality), acceptance_rate (SSBD efficiency).
+tags:
+  - ssbd
+  - speculative-decoding
+  - local-agreement
+  - en-zh

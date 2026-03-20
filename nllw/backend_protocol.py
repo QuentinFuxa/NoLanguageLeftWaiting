@@ -45,6 +45,12 @@ class BackendConfig:
     aggregation: str = "ts_vote"
     # Dynamic border distance (adjusts per-token based on attention entropy)
     dynamic_border: bool = False
+    # SSBD (Self-Speculative Biased Decoding) for LA backend
+    # None = disabled, 0.0 = pure speculative (no bias), 0.2 = recommended
+    ssbd_beta: Optional[float] = None
+    # Display-only mask-k: hide last k tokens from display but keep as draft
+    # Reduces output flicker (NE) while maintaining SSBD speedup. 0 = disabled.
+    display_mask_k: int = 0
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)
