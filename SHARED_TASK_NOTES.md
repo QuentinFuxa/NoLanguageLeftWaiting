@@ -1,8 +1,8 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## What exists now (after Iteration 8, 2026-03-20)
+## What exists now (after Iteration 9, 2026-03-20)
 
-**23 SimulMT modules (~9900 lines), 396 tests passing:**
+**23 SimulMT modules (~10100 lines), 441 tests passing:**
 
 ### Core (Iterations 1-7):
 - `nllw/prompts.py` -- 30+ prompt formats (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, Gemma)
@@ -47,6 +47,25 @@
   - 9 new tests for complexity-adaptive
 - 36 new tests total (396 all passing)
 
+### New in Iteration 9:
+- **Entropy change tracking** (REINA-inspired, arxiv 2508.04946, AAAI 2026):
+  - `compute_entropy_change()` in alignatt.py: track H(first_token) across translate() calls
+  - If new source word caused large entropy drop -> model is learning -> inhibit border stop (READ)
+  - If entropy change is small -> source exhausted -> allow border stop (WRITE)
+  - Pre-filter in `check_border_combined()`: fires before attention checks
+  - `--entropy-change -0.5` CLI, `entchg=-0.5,-1.0` sweep shortname
+  - Zero overhead: reuses existing logits
+- **Prediction stability index** (novel, no published work):
+  - `compute_prediction_stability()`: top-1 rank change + top-K Jaccard overlap
+  - Stable predictions (rank <= 3, overlap >= 0.4) -> model has enough context -> WRITE
+  - Volatile predictions -> model still adapting -> override border stop -> READ
+  - Post-filter in `check_border_combined()`: fires after attention checks
+  - `--prediction-stability` CLI, `predstab=0,1` sweep shortname
+  - Overhead: one logits copy per translate() call
+- **Cross-step signal architecture**: both signals computed once per translate() call, stored
+  as instance variables, consumed by `_check_border()`, reset on segment boundary
+- 45 new tests (441 all passing)
+
 ## What to do next
 
 ### Priority 1: Run experiments on A40 (ALL code is ready, NOTHING tested on GPU yet)
@@ -86,6 +105,16 @@ python -m nllw.bench --sweep "ams=0,1 tempnorm=0,1" --lang en-zh --comet --save
 
 # 1h. Pareto sweep
 python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --save
+
+# 1i. REINA entropy change (new in iteration 9)
+python -m nllw.bench --sweep "entchg=-0.3,-0.5,-1.0,-2.0" --lang en-zh --comet --save
+python -m nllw.bench --entropy-change -0.5 --prediction-stability --lang en-zh --comet --save
+python -m nllw.bench --entropy-change -0.5 --shift-k 0.4 --lang en-zh --comet --save
+python -m nllw.bench --entropy-change -0.5 --lsg-kl 7.0 --lang en-zh --comet --save
+
+# 1j. Full cross-step signals (new in iteration 9)
+python -m nllw.bench --entropy-change -0.5 --prediction-stability --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save
+python -m nllw.bench --sweep "entchg=-0.5,-1.0 predstab=0,1" --lang en-zh --comet --save
 ```
 
 ### Priority 2: Further optimizations
@@ -109,10 +138,11 @@ python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --
 - `aggregate()` dispatcher routes to any of 10 aggregation strategies
 - LA backend retranslation priority: SSBD > forced_decode > standard
 - Two-pass uses pass 1 (SSBD/forced/standard) + pass 2 (always standard) for diversity
-- `_check_border()` helper centralizes all border check params (AMS, temp norm, dynamic, shift-k, info gain)
-- `check_border_combined()` fuses multiple signals: standard + shift-k mass + info gain
+- `_check_border()` helper centralizes all border check params (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability)
+- `check_border_combined()` fuses multiple signals: standard + shift-k mass + info gain + entropy change + prediction stability
 - Cross-lingual head transfer: most models have >90% TS mass transfer across pairs
 - **LSG probe uses seq_id=1 fork**: `memory_seq_cp(0, 1)` + `memory_seq_rm(1, ...)` + re-decode + cleanup. Zero impact on main seq 0.
+- **Cross-step signals**: entropy change and prediction stability are computed once per translate() call (not per generation step). They modulate the border decision from attention-based checks.
 
 ## Important context
 
@@ -125,6 +155,9 @@ python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --
 - **10 aggregation methods**: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, cumulative, ensemble
 - **New iter8 params**: `lsg_kl_threshold` (None=disabled, 7.0=recommended), `lsg_k` (3=default), `complexity_adaptive` (False=disabled)
 - **New iter8 sweeps**: `lsg=5.0,7.0,9.0`, `lsgk=1,3,5`, `cmplx=0,1`
+- **New iter9 params**: `entropy_change_threshold` (None=disabled, -0.5=recommended), `prediction_stability` (False=disabled)
+- **New iter9 sweeps**: `entchg=-0.3,-0.5,-1.0`, `predstab=0,1`
+- **Key insight**: Entropy change and prediction stability are OUTPUT-SPACE cross-step signals, orthogonal to attention-based within-step signals. They measure whether the MODEL'S BEHAVIOR changed after adding a new source word.
 - **LSG implementation**: KV cache fork (seq_cp + seq_rm) + single-token re-decode + logit KL. ~1-3ms per probe.
 - **Key insight**: LSG is ORTHOGONAL to attention-based border: attention = WHERE model looks, logit KL = WHETHER removing source changes OUTPUT. Combining both gives stronger signal.
 - SOTA research documented in `docs/research/sota-simulmt-2026.md`
@@ -139,5 +172,7 @@ python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --
 - **Open gap**: No published work on attention mass border detection (our shift-k is novel)
 - **Open gap**: No published work on info gain modulation for SimulMT border detection
 - **Open gap**: No published work on combining logit KL + attention border (our LSG integration is novel)
+- **Open gap**: No published work on cross-step prediction stability for SimulMT (our prediction stability index is novel)
+- **Open gap**: No published work on entropy change as cross-step border modulation (our REINA integration is novel extension)
 - **Hikari** is main competitor: policy-free WAIT tokens
 - **IWSLT 2026 metrics**: LongYAAL (primary latency), XCOMET-XL (primary quality)

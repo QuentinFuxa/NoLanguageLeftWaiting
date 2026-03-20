@@ -43,9 +43,12 @@ from .alignatt import (
     check_border_dynamic,
     compute_dynamic_word_batch,
     compute_entropy,
+    compute_entropy_change,
     compute_logit_kl,
+    compute_prediction_stability,
     is_target_language,
     load_head_config,
+    prediction_stability_supports_write,
 )
 from .complexity import adaptive_params_from_complexity
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
@@ -277,6 +280,12 @@ class AlignAttLABackend(SimulMTBackend):
         self._ssbd_draft_tokens: int = 0    # Total draft tokens proposed
         self._ssbd_accepted_tokens: int = 0  # Total draft tokens accepted
 
+        # Cross-step tracking for REINA entropy change + prediction stability
+        self._prev_first_token_entropy: Optional[float] = None
+        self._prev_first_token_logits: Optional[np.ndarray] = None
+        self._current_entropy_change: Optional[float] = None
+        self._current_pred_stability_write: Optional[bool] = None
+
     def translate(self, source_word: str, is_final: bool = False,
                   emission_time: float = 0.0) -> TranslationStep:
         """Process a new source word through AlignAtt + LocalAgreement.
@@ -357,12 +366,14 @@ class AlignAttLABackend(SimulMTBackend):
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
-        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain)."""
+        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability)."""
         bd = getattr(self, '_effective_bd', self.config.border_distance)
-        # Use combined check if shift-k or info-gain enabled
+        # Use combined check if any multi-signal feature enabled
         use_combined = (
             self.config.shift_k_threshold is not None
             or self.config.info_gain_threshold is not None
+            or self.config.entropy_change_threshold is not None
+            or self.config.prediction_stability
         )
         if use_combined:
             hit, _, _ = check_border_combined(
@@ -376,6 +387,9 @@ class AlignAttLABackend(SimulMTBackend):
                 prev_attn=getattr(self, '_prev_step_attn', None),
                 info_gain_threshold=self.config.info_gain_threshold,
                 dynamic_border=self.config.dynamic_border,
+                entropy_change=self._current_entropy_change,
+                entropy_change_threshold=self.config.entropy_change_threshold,
+                pred_stability_write=self._current_pred_stability_write,
             )
             self._prev_step_attn = src_attn.copy()
             return hit
@@ -432,6 +446,38 @@ class AlignAttLABackend(SimulMTBackend):
             return compute_logit_kl(logits_full, logits_reduced)
         finally:
             ll.memory_seq_rm(self._mem, 1, 0, -1)
+
+    def _update_cross_step_signals(self):
+        """Update REINA entropy change and prediction stability signals.
+
+        Called once per translate() before the generation loop. Compares
+        the model's first-token logits with those from the previous call
+        to detect whether the new source word was informative.
+        """
+        use_entropy_change = self.config.entropy_change_threshold is not None
+        use_pred_stability = self.config.prediction_stability
+        if not (use_entropy_change or use_pred_stability):
+            return
+
+        first_logits = ll.get_logits_array(self._ctx, -1, self._nv)
+        if first_logits is None:
+            return
+
+        if use_entropy_change:
+            delta_h, cur_h = compute_entropy_change(
+                first_logits, self._prev_first_token_entropy
+            )
+            self._current_entropy_change = delta_h
+            self._prev_first_token_entropy = cur_h
+
+        if use_pred_stability:
+            top1_rank, topk_ovl = compute_prediction_stability(
+                first_logits, self._prev_first_token_logits
+            )
+            self._current_pred_stability_write = (
+                prediction_stability_supports_write(top1_rank, topk_ovl)
+            )
+            self._prev_first_token_logits = first_logits.copy()
 
     def _retranslate(self, is_final: bool) -> List[int]:
         """Re-translate the full source using AlignAtt.
@@ -491,6 +537,9 @@ class AlignAttLABackend(SimulMTBackend):
         src_start = prefix_len
         src_end = prefix_len + len(source_tokens)
         num_src_tokens = src_end - src_start
+
+        # Update cross-step signals (REINA + prediction stability)
+        self._update_cross_step_signals()
 
         # Generate tokens
         gen_ids = []
@@ -585,6 +634,9 @@ class AlignAttLABackend(SimulMTBackend):
             ll.decode_batch_at(self._ctx, forced_tokens, pos_start=prefix_len)
 
         pos = prefix_len + len(forced_tokens)
+
+        # Update cross-step signals (REINA + prediction stability)
+        self._update_cross_step_signals()
 
         # Start with committed tokens as the base
         gen_ids = list(self._committed_ids)
@@ -685,6 +737,9 @@ class AlignAttLABackend(SimulMTBackend):
                 self._ctx, verify_tokens,
                 pos_start=prefix_len, output_last_only=False,
             )
+
+        # Update cross-step signals (REINA + prediction stability)
+        self._update_cross_step_signals()
 
         # Batch index where the first draft token's prediction starts
         # (logits at this index predict what comes after source+suffix)
@@ -974,6 +1029,11 @@ class AlignAttLABackend(SimulMTBackend):
         self._source_words = []
         self._batch_counter = 0
         self._revision_history = []
+        # Reset cross-step tracking
+        self._prev_first_token_entropy = None
+        self._prev_first_token_logits = None
+        self._current_entropy_change = None
+        self._current_pred_stability_write = None
 
         if self._ctx is not None:
             ll.free_context(self._ctx)

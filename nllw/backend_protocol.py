@@ -113,6 +113,18 @@ class BackendConfig:
     # and adjust border_distance, word_batch, and generation cap per-sentence.
     # Simple sentences -> aggressive (smaller bd/wb), complex -> conservative.
     complexity_adaptive: bool = False
+    # Entropy change tracking (REINA-inspired, arxiv 2508.04946, AAAI 2026):
+    # Track generation entropy across consecutive translate() calls. If adding
+    # a new source word significantly reduces entropy (entropy_change < threshold),
+    # the model is still learning from source -> inhibit border stop (READ more).
+    # None=disabled, -0.5=recommended. Negative values: larger drop needed to inhibit.
+    entropy_change_threshold: Optional[float] = None
+    # Prediction stability tracking (novel): measure how much the model's top
+    # predictions change between consecutive translate() calls. Stable predictions
+    # = model has enough source context (supports WRITE). Volatile predictions
+    # = model still adapting (supports READ). Combined with attention border check.
+    # False=disabled, True=enabled.
+    prediction_stability: bool = False
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

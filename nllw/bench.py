@@ -71,6 +71,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "lsg": "lsg_kl_threshold",
         "lsgk": "lsg_k",
         "cmplx": "complexity_adaptive",
+        "entchg": "entropy_change_threshold",
+        "predstab": "prediction_stability",
     }
 
     grid = {}
@@ -89,6 +91,47 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         grid[full_key] = values
 
     return grid
+
+
+def _build_base_config_dict(args) -> Dict[str, Any]:
+    """Build a full config dict from CLI args. Used by all run modes.
+
+    This centralizes ALL config parameters so that run_comparison() and
+    run_sweep() get the same full config as run_benchmark().
+    """
+    parts = args.lang.split("-")
+    tgt_lang = parts[1]
+    return {
+        "backend_type": args.backend,
+        "model_path": args.model or "",
+        "heads_path": args.heads or "",
+        "direction": args.lang,
+        "border_distance": args.border_distance,
+        "word_batch": args.word_batch,
+        "context_sentences": args.context_sentences,
+        "target_lang": tgt_lang,
+        "n_ctx": args.n_ctx,
+        "wait_k": args.wait_k,
+        "entropy_veto_threshold": args.entropy_threshold,
+        "aggregation": args.aggregation,
+        "dynamic_border": args.dynamic_border,
+        "ssbd_beta": args.ssbd_beta,
+        "la_forced_decode": args.forced_decode,
+        "adaptive_ssbd": args.adaptive_ssbd,
+        "la_two_pass": args.two_pass,
+        "adaptive_aggregation": args.adaptive_agg,
+        "head_temp_normalize": args.head_temp_norm,
+        "head_temp_reference": args.head_temp_ref,
+        "dynamic_word_batch": args.dynamic_wb,
+        "info_gain_threshold": args.info_gain,
+        "shift_k_threshold": args.shift_k,
+        "border_confirm": args.border_confirm,
+        "lsg_kl_threshold": args.lsg_kl,
+        "lsg_k": args.lsg_k,
+        "complexity_adaptive": args.complexity_adaptive,
+        "entropy_change_threshold": args.entropy_change,
+        "prediction_stability": args.prediction_stability,
+    }
 
 
 def run_benchmark(args):
@@ -111,35 +154,7 @@ def run_benchmark(args):
 
     print(f"Benchmark: {args.lang} | {len(corpus)} sentences | suite={args.suite}", file=sys.stderr)
 
-    config = BackendConfig(
-        backend_type=args.backend,
-        model_path=args.model or "",
-        heads_path=args.heads or "",
-        direction=args.lang,
-        border_distance=args.border_distance,
-        word_batch=args.word_batch,
-        context_sentences=args.context_sentences,
-        target_lang=tgt_lang,
-        n_ctx=args.n_ctx,
-        wait_k=args.wait_k,
-        entropy_veto_threshold=args.entropy_threshold,
-        aggregation=args.aggregation,
-        dynamic_border=args.dynamic_border,
-        ssbd_beta=args.ssbd_beta,
-        la_forced_decode=args.forced_decode,
-        adaptive_ssbd=args.adaptive_ssbd,
-        la_two_pass=args.two_pass,
-        adaptive_aggregation=args.adaptive_agg,
-        head_temp_normalize=args.head_temp_norm,
-        head_temp_reference=args.head_temp_ref,
-        dynamic_word_batch=args.dynamic_wb,
-        info_gain_threshold=args.info_gain,
-        shift_k_threshold=args.shift_k,
-        border_confirm=args.border_confirm,
-        lsg_kl_threshold=args.lsg_kl,
-        lsg_k=args.lsg_k,
-        complexity_adaptive=args.complexity_adaptive,
-    )
+    config = BackendConfig.from_dict(_build_base_config_dict(args))
 
     backend = create_backend(config)
     try:
@@ -160,18 +175,13 @@ def run_comparison(args):
     src_lang, tgt_lang = parts[0], parts[1]
     corpus = load_flores(src_lang, tgt_lang, n=args.n)
 
+    base = _build_base_config_dict(args)
+
     results = []
     for backend_type in args.compare:
         print(f"\n=== Backend: {backend_type} ===", file=sys.stderr)
-        config = BackendConfig(
-            backend_type=backend_type,
-            model_path=args.model or "",
-            heads_path=args.heads or "",
-            direction=args.lang,
-            border_distance=args.border_distance,
-            word_batch=args.word_batch,
-            target_lang=tgt_lang,
-        )
+        cfg = dict(base, backend_type=backend_type)
+        config = BackendConfig.from_dict(cfg)
         backend = create_backend(config)
         try:
             result = evaluate_backend(
@@ -208,15 +218,7 @@ def run_sweep(args):
     param_grid = parse_sweep_spec(args.sweep)
     print(f"Sweep: {param_grid}", file=sys.stderr)
 
-    base_config = {
-        "backend_type": args.backend,
-        "model_path": args.model or "",
-        "heads_path": args.heads or "",
-        "direction": args.lang,
-        "border_distance": args.border_distance,
-        "word_batch": args.word_batch,
-        "target_lang": tgt_lang,
-    }
+    base_config = _build_base_config_dict(args)
 
     from .eval import parameter_sweep
 
@@ -307,6 +309,10 @@ def main():
                         help="LSG: number of source tokens to remove for probe (default: 3)")
     parser.add_argument("--complexity-adaptive", action="store_true",
                         help="Enable per-sentence complexity-adaptive bd/wb/gen_cap")
+    parser.add_argument("--entropy-change", type=float, default=None,
+                        help="REINA entropy change threshold (-0.5=recommended, None=disabled)")
+    parser.add_argument("--prediction-stability", action="store_true",
+                        help="Enable cross-step prediction stability border modulation")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

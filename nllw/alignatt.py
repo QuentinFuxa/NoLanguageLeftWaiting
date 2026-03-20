@@ -1089,18 +1089,25 @@ def check_border_combined(
     prev_attn: Optional[np.ndarray] = None,
     info_gain_threshold: Optional[float] = None,
     dynamic_border: bool = False,
+    entropy_change: Optional[float] = None,
+    entropy_change_threshold: Optional[float] = None,
+    pred_stability_write: Optional[bool] = None,
 ) -> Tuple[bool, Optional[float], Optional[float]]:
     """Combined border check with all available signals.
 
-    Combines: standard AlignAtt + shift-k mass + info gain.
+    Combines: standard AlignAtt + shift-k mass + info gain +
+    entropy change (REINA) + prediction stability (novel).
     Returns the border decision plus diagnostic values.
 
     Decision logic:
-        1. If shift_k_threshold is set and border mass >= threshold -> STOP
-        2. If info_gain_threshold is set and info_gain < threshold -> REINFORCE STOP
+        1. Cross-step pre-filter: if entropy change indicates strong READ
+           signal (large entropy drop from new source word), inhibit stop
+        2. If shift_k_threshold is set and border mass >= threshold -> STOP
+        3. If info_gain_threshold is set and info_gain < threshold -> REINFORCE STOP
            (only stops if standard border also says stop)
-        3. If info_gain > threshold*3 -> INHIBIT STOP (override border if info gain high)
-        4. Standard AlignAtt border check as fallback
+        4. If info_gain > threshold*3 -> INHIBIT STOP (override if info gain high)
+        5. Standard AlignAtt border check as fallback
+        6. Cross-step post-filter: prediction stability can modulate final decision
 
     Args:
         src_attn, ts_scores, n_src_tokens, border_distance: Standard border params
@@ -1110,6 +1117,13 @@ def check_border_combined(
         prev_attn: Previous step attention (for info gain)
         info_gain_threshold: If set, enable info gain modulation
         dynamic_border: If True, use entropy-based dynamic border
+        entropy_change: Pre-computed entropy change from compute_entropy_change()
+            (REINA signal). Negative = entropy dropped (source informative).
+        entropy_change_threshold: Threshold for entropy change (default: None).
+            If delta < threshold, inhibit border stop (source still informative).
+        pred_stability_write: Pre-computed from prediction_stability_supports_write().
+            True = predictions stable (supports WRITE). False = volatile (READ).
+            None = signal unavailable.
 
     Returns:
         (border_hit, info_gain_value, border_mass_value)
@@ -1120,6 +1134,14 @@ def check_border_combined(
 
     info_gain_val = None
     border_mass_val = None
+
+    # 0. Cross-step pre-filter: entropy change (REINA-inspired)
+    # If adding the new source word caused a large entropy drop, the model
+    # is actively learning from source -> inhibit stop
+    if (entropy_change is not None and entropy_change_threshold is not None
+            and entropy_change < entropy_change_threshold):
+        # Strong READ signal: entropy dropped significantly
+        return False, None, None
 
     # 1. Compute info gain if available
     if prev_attn is not None and info_gain_threshold is not None:
@@ -1195,6 +1217,14 @@ def check_border_combined(
         if info_gain_val > info_gain_threshold * 1.5:
             return False, info_gain_val, border_mass_val
 
+    # 4. Cross-step post-filter: prediction stability modulation
+    # If attention says stop but predictions are volatile (READ signal),
+    # override the stop to keep generating
+    if standard_hit and pred_stability_write is not None:
+        if not pred_stability_write:
+            # Predictions are volatile -> model still adapting -> override stop
+            return False, info_gain_val, border_mass_val
+
     return standard_hit, info_gain_val, border_mass_val
 
 
@@ -1240,6 +1270,149 @@ def compute_logit_kl(
     # KL(P || Q) = sum(p * log(p / q))
     kl = float(np.sum(p * np.log((p + eps) / (q + eps))))
     return max(0.0, kl)  # guard against numerical noise
+
+
+def compute_entropy_change(
+    current_logits: np.ndarray,
+    prev_entropy: Optional[float],
+) -> Tuple[Optional[float], float]:
+    """Compute change in generation entropy between translate() steps.
+
+    Inspired by REINA (arxiv 2508.04946, AAAI 2026 Oral): use information
+    gain to decide READ/WRITE. Track entropy of the first generated token
+    across consecutive translate() calls. If adding a new source word
+    reduced entropy significantly, the model is still learning from source
+    (READ more). If entropy didn't change, source is exhausted (WRITE).
+
+    This is a cross-step signal (between translate() calls), unlike
+    attention-based checks which are within a single generation loop.
+
+    Args:
+        current_logits: Raw logits from the first generation position (n_vocab,)
+        prev_entropy: Entropy from the previous translate() call. None on first call.
+
+    Returns:
+        (entropy_change, current_entropy):
+            entropy_change: H_current - H_previous. Negative = entropy dropped
+                (new source word was informative). None if no previous entropy.
+            current_entropy: Current entropy value (to store for next call).
+    """
+    current_entropy = compute_entropy(current_logits)
+
+    if prev_entropy is None:
+        return None, current_entropy
+
+    delta = current_entropy - prev_entropy
+    return delta, current_entropy
+
+
+def compute_prediction_stability(
+    current_logits: np.ndarray,
+    prev_logits: Optional[np.ndarray],
+    top_k: int = 5,
+) -> Tuple[Optional[float], Optional[float]]:
+    """Compute prediction stability between consecutive translate() calls.
+
+    Measures how much the model's output predictions changed when a new
+    source word was added. Stable predictions indicate the model has
+    enough source context (supports WRITE). Volatile predictions indicate
+    the model is still adapting to new source info (supports READ).
+
+    Two complementary metrics:
+    1. Top-1 rank stability: rank of previous top-1 token in current distribution.
+       Low rank (0-2) = stable, high rank (10+) = volatile.
+    2. Top-K overlap: Jaccard similarity of top-K predicted tokens.
+       1.0 = identical, 0.0 = no overlap.
+
+    Novel: no published work on cross-step prediction stability for
+    SimulMT border detection.
+
+    Args:
+        current_logits: Raw logits from first generation position (n_vocab,)
+        prev_logits: Raw logits from previous translate() call. None on first call.
+        top_k: Number of top tokens to compare (default: 5)
+
+    Returns:
+        (top1_rank_change, topk_overlap):
+            top1_rank_change: Rank of previous top-1 in current distribution
+                (0 = unchanged, higher = more volatile). None if no previous.
+            topk_overlap: Jaccard similarity of top-K sets (0-1).
+                None if no previous logits.
+    """
+    if prev_logits is None:
+        return None, None
+
+    # Previous top-1 token
+    prev_top1 = int(np.argmax(prev_logits))
+
+    # Current ranking: sort by descending logit
+    current_ranking = np.argsort(current_logits)[::-1]
+
+    # Find rank of prev_top1 in current distribution
+    rank_positions = np.where(current_ranking == prev_top1)[0]
+    top1_rank = int(rank_positions[0]) if len(rank_positions) > 0 else len(current_logits)
+
+    # Top-K overlap (Jaccard)
+    prev_topk = set(int(x) for x in np.argsort(prev_logits)[-top_k:])
+    curr_topk = set(int(x) for x in current_ranking[:top_k])
+    intersection = len(prev_topk & curr_topk)
+    union = len(prev_topk | curr_topk)
+    topk_overlap = intersection / union if union > 0 else 1.0
+
+    return float(top1_rank), topk_overlap
+
+
+def entropy_change_supports_write(
+    entropy_change: Optional[float],
+    threshold: float = -0.5,
+) -> Optional[bool]:
+    """Interpret entropy change as a READ/WRITE signal.
+
+    Args:
+        entropy_change: H_current - H_previous (from compute_entropy_change)
+        threshold: Negative threshold. If delta > threshold (close to 0),
+            source is exhausted -> WRITE. If delta < threshold (large drop),
+            source is informative -> READ more. Default: -0.5.
+
+    Returns:
+        True if entropy change supports WRITE (source exhausted).
+        False if it supports READ (source still informative).
+        None if entropy change is unavailable.
+    """
+    if entropy_change is None:
+        return None
+    # delta close to zero or positive -> source didn't help -> WRITE
+    # delta very negative -> source reduced uncertainty -> READ more
+    return entropy_change > threshold
+
+
+def prediction_stability_supports_write(
+    top1_rank: Optional[float],
+    topk_overlap: Optional[float],
+    rank_threshold: float = 3.0,
+    overlap_threshold: float = 0.4,
+) -> Optional[bool]:
+    """Interpret prediction stability as a READ/WRITE signal.
+
+    Args:
+        top1_rank: Rank of previous top-1 in current distribution
+        topk_overlap: Jaccard similarity of top-K sets
+        rank_threshold: If top1_rank <= threshold, predictions are stable (WRITE).
+            Default: 3.0 (top-1 stayed in top-3).
+        overlap_threshold: If topk_overlap >= threshold, predictions are stable.
+            Default: 0.4 (at least 40% top-K overlap).
+
+    Returns:
+        True if predictions are stable (supports WRITE).
+        False if volatile (supports READ).
+        None if no stability data available.
+    """
+    if top1_rank is None or topk_overlap is None:
+        return None
+    # Both signals must agree for a strong signal
+    rank_stable = top1_rank <= rank_threshold
+    overlap_stable = topk_overlap >= overlap_threshold
+    return rank_stable and overlap_stable
 
 
 def adaptive_border_distance(
