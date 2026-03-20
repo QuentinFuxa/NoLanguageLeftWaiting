@@ -15,8 +15,9 @@ how far ahead the model generates given available source).
 Optimizations:
     - KV cache reuse: The prompt prefix is identical across re-translations,
       so we keep the prefix KV cache and only re-decode from the source onwards.
-    - SSBD potential: Previous translation can serve as a speculative draft
-      for the next re-translation (future work, see arxiv 2509.21740).
+    - SSBD: Self-Speculative Biased Decoding (Zeng et al., arxiv 2509.21740).
+      Previous translation serves as draft, verified in one batch forward pass.
+      1.3-1.7x speedup with zero quality loss (beta=0.2 recommended).
     - Token-level diff: Compare at token level, not word level, for precision.
 
 Reference:
@@ -24,11 +25,13 @@ Reference:
       winning SimulST system
     - Ma et al. (2019): Original re-translation approach
     - Arivazhagan et al. (2020): Re-translation with incremental decoding
+    - Zeng et al. (2025): SSBD for re-translation speedup
 """
 
+import math
 import time
 import threading
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 import numpy as np
 
@@ -95,6 +98,50 @@ def _longest_common_prefix_words(a: str, b: str) -> str:
     if common == 0:
         return ""
     return " ".join(words_a[:common])
+
+
+def ssbd_accept(logits: np.ndarray, draft_token: int, beta: float) -> bool:
+    """Check if a draft token is accepted under biased speculative decoding.
+
+    Biased probability: P'(v) = (1-beta) * P_model(v) + beta * delta(v == draft)
+    Accept draft if P'(draft) >= max_{v != draft} P'(v).
+
+    Simplification for greedy decoding:
+        Accept if (1-beta)*P(draft) + beta >= (1-beta)*P(argmax)
+        i.e., P(draft) >= P(argmax) - beta/(1-beta)
+
+    With logits, we avoid full softmax by using the log-sum-exp trick:
+        We accept if draft is argmax, OR if the probability gap is within threshold.
+
+    Args:
+        logits: Raw logit array of shape (n_vocab,)
+        draft_token: The draft token ID to verify
+        beta: Bias strength (0.0 = pure speculative, 0.2 = recommended)
+
+    Returns:
+        True if draft token is accepted
+    """
+    argmax_tok = int(np.argmax(logits))
+
+    # If draft is already the greedy choice, always accept
+    if argmax_tok == draft_token:
+        return True
+
+    # If no bias, reject (draft != argmax)
+    if beta <= 0.0:
+        return False
+
+    # Biased acceptance: compute softmax probabilities for draft and argmax only
+    # P(draft) = exp(l_draft) / Z, P(argmax) = exp(l_argmax) / Z
+    # Accept if P(draft) >= P(argmax) - beta/(1-beta)
+    # Equivalently: exp(l_draft - l_argmax) >= 1 - beta/(1-beta)
+    # Which is: l_draft >= l_argmax + log(1 - beta/(1-beta))
+    threshold = beta / (1.0 - beta)
+    # Accept if P(draft)/P(argmax) >= 1 - threshold
+    # i.e., exp(l_draft - l_argmax) >= 1 - threshold
+    log_ratio = logits[draft_token] - logits[argmax_tok]
+    prob_ratio = math.exp(min(log_ratio, 0.0))  # clamp to avoid overflow
+    return prob_ratio >= 1.0 - threshold
 
 
 @register_backend("alignatt-la")
@@ -173,6 +220,13 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
 
+        # Revision history for NE metric computation
+        self._revision_history: List[List[int]] = []
+
+        # SSBD stats
+        self._ssbd_draft_tokens: int = 0    # Total draft tokens proposed
+        self._ssbd_accepted_tokens: int = 0  # Total draft tokens accepted
+
     def translate(self, source_word: str, is_final: bool = False,
                   emission_time: float = 0.0) -> TranslationStep:
         """Process a new source word through AlignAtt + LocalAgreement.
@@ -203,6 +257,9 @@ class AlignAttLABackend(SimulMTBackend):
             # Full re-translation from scratch
             new_full_ids = self._retranslate(is_final)
 
+            # Track revision history for NE metric
+            self._revision_history.append(list(new_full_ids))
+
             if is_final:
                 # On final, commit everything from the new translation
                 new_text = self._commit_all(new_full_ids)
@@ -231,12 +288,25 @@ class AlignAttLABackend(SimulMTBackend):
     def _retranslate(self, is_final: bool) -> List[int]:
         """Re-translate the full source from scratch using AlignAtt.
 
-        Reuses the prefix KV cache (prompt prefix is always the same).
-        Only re-decodes from source tokens onwards.
+        If SSBD is enabled and we have a previous translation, uses speculative
+        draft verification for 1.3-1.7x speedup. Otherwise falls back to
+        standard autoregressive generation.
 
         Returns:
             Full list of generated token IDs (not just delta)
         """
+        use_ssbd = (
+            self.config.ssbd_beta is not None
+            and self._prev_full_ids
+            and not is_final  # On final, generate fully (no border detection needed)
+        )
+
+        if use_ssbd:
+            return self._retranslate_ssbd()
+        return self._retranslate_standard(is_final)
+
+    def _retranslate_standard(self, is_final: bool) -> List[int]:
+        """Standard autoregressive re-translation with border detection."""
         accumulated_source = " ".join(self._source_words)
         source_tokens = ll.tokenize(
             self._vocab, accumulated_source, add_bos=False, special=False
@@ -312,6 +382,155 @@ class AlignAttLABackend(SimulMTBackend):
 
         return gen_ids
 
+    def _retranslate_ssbd(self) -> List[int]:
+        """Re-translate using SSBD: verify previous translation as draft.
+
+        Self-Speculative Biased Decoding (Zeng et al., 2025):
+        1. Decode source + suffix + draft_tokens in ONE batch forward pass
+        2. At each draft position, check if model agrees (with beta bias)
+        3. Accept all tokens up to first divergence
+        4. Resume autoregressive generation from divergence point
+        5. Apply border detection during autoregressive phase
+
+        The batch decode is much faster than sequential token generation,
+        so if most draft tokens match, we save significant compute.
+
+        Returns:
+            Full list of generated token IDs
+        """
+        beta = self.config.ssbd_beta
+        draft_tokens = list(self._prev_full_ids)
+
+        accumulated_source = " ".join(self._source_words)
+        source_tokens = ll.tokenize(
+            self._vocab, accumulated_source, add_bos=False, special=False
+        )
+
+        prefix_len = len(self._prefix_tokens)
+
+        # Clear KV cache from prefix_len onwards (keep prefix)
+        if not ll.memory_seq_rm(self._mem, 0, prefix_len, -1):
+            ll.memory_clear(self._mem)
+            if self._prefix_tokens:
+                ll.decode_batch_at(self._ctx, self._prefix_tokens, pos_start=0)
+
+        src_start = prefix_len
+        src_end = prefix_len + len(source_tokens)
+        num_src_tokens = src_end - src_start
+
+        # === Phase 1: Batch verify draft tokens ===
+        # Decode: source + suffix + draft_tokens with logits at all positions
+        verify_tokens = source_tokens + self._suffix_tokens + draft_tokens
+        if verify_tokens:
+            ll.decode_batch_at(
+                self._ctx, verify_tokens,
+                pos_start=prefix_len, output_last_only=False,
+            )
+
+        # Batch index where the first draft token's prediction starts
+        # (logits at this index predict what comes after source+suffix)
+        verify_start = len(source_tokens) + len(self._suffix_tokens) - 1
+
+        # Track stats
+        self._ssbd_draft_tokens += len(draft_tokens)
+
+        # Verify each draft token
+        accepted = 0
+        for j in range(len(draft_tokens)):
+            batch_idx = verify_start + j
+            logits = ll.get_logits_array(self._ctx, batch_idx, self._nv)
+            if logits is None:
+                break
+
+            # Check if draft token in stop set
+            if draft_tokens[j] in self._stop_ids:
+                break
+
+            if ssbd_accept(logits, draft_tokens[j], beta):
+                accepted += 1
+            else:
+                break
+
+        self._ssbd_accepted_tokens += accepted
+
+        # === Phase 2: Prepare for continuation ===
+        # Clear KV cache beyond the accepted tokens
+        # Keep: prefix + source + suffix + accepted draft tokens
+        accepted_end = prefix_len + len(source_tokens) + len(self._suffix_tokens) + accepted
+        ll.memory_seq_rm(self._mem, 0, accepted_end, -1)
+
+        gen_ids = list(draft_tokens[:accepted])
+
+        # If all draft tokens accepted and we haven't hit border,
+        # continue generating new tokens autoregressively
+        pos = accepted_end
+
+        # If we rejected at a position, add the correct token from divergence
+        if accepted < len(draft_tokens):
+            # Get the correct token at the divergence point
+            # (logits at verify_start + accepted predict what should come there)
+            batch_idx = verify_start + accepted
+            correct_tok = ll.argmax_logits(self._ctx, batch_idx, self._nv)
+
+            # Decode the correction token into the KV cache so Phase 3
+            # can continue from fresh logits at pos
+            if correct_tok not in self._stop_ids and correct_tok >= 0:
+                ll.decode_single_at(self._ctx, correct_tok, pos, seq_id=0)
+                pos += 1
+                gen_ids.append(correct_tok)
+        # else: all draft accepted -- logits at the last batch position already
+        # predict the next token, so Phase 3 can proceed directly using
+        # argmax_logits(ctx, -1, nv) from the batch decode
+
+        # === Phase 3: Autoregressive continuation with border detection ===
+        max_gen = self.config.max_new_per_step - len(gen_ids)
+        for step in range(max(0, max_gen)):
+            next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
+            if next_tok in self._stop_ids or next_tok < 0:
+                break
+
+            # Entropy veto
+            if self.config.entropy_veto_threshold is not None:
+                logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                if logits is not None:
+                    ent = compute_entropy(logits)
+                    if ent > self.config.entropy_veto_threshold:
+                        break
+
+            ll.decode_single_at(self._ctx, next_tok, pos, seq_id=0)
+            pos += 1
+
+            # Border detection
+            if num_src_tokens > 0:
+                ctx_size = ll.n_ctx(self._ctx)
+                attn = ll.get_attn_weights(
+                    self._ctx, 0, self._n_heads, ctx_size
+                )
+                if attn is not None and src_end <= attn.shape[1]:
+                    src_attn = attn[:, src_start:src_end]
+                    if self.config.dynamic_border:
+                        border_hit = check_border_dynamic(
+                            src_attn, self._ts_scores,
+                            num_src_tokens, self.config.border_distance,
+                            aggregation=self.config.aggregation,
+                        )
+                    else:
+                        border_hit = check_border(
+                            src_attn, self._ts_scores,
+                            num_src_tokens, self.config.border_distance,
+                            aggregation=self.config.aggregation,
+                        )
+                    if border_hit:
+                        gen_ids.append(next_tok)
+                        break
+
+            gen_ids.append(next_tok)
+
+        # Clean up generated tokens from KV cache
+        ll.memory_seq_rm(self._mem, 0, prefix_len, -1)
+
+        return gen_ids
+
     def _commit_stable_prefix(self, new_full_ids: List[int]) -> str:
         """Find and commit the stable prefix between old and new translations.
 
@@ -320,6 +539,12 @@ class AlignAttLABackend(SimulMTBackend):
         - new_full_ids (current re-translation)
 
         We only commit tokens from this prefix that haven't been committed yet.
+
+        With display_mask_k > 0 (display-only mask-k from SSBD paper):
+        - The last k tokens of the stable prefix are hidden from display
+        - But they remain in prev_full_ids for SSBD draft verification
+        - This reduces NE (output flicker) while maintaining SSBD speedup
+        - On is_final, all tokens are committed (mask cleared)
 
         Returns:
             Newly committed text (the delta from previously committed)
@@ -334,12 +559,19 @@ class AlignAttLABackend(SimulMTBackend):
         # Find longest common prefix at token level
         stable_len = _longest_common_prefix_tokens(self._prev_full_ids, new_full_ids)
 
-        if stable_len <= len(self._committed_ids):
+        # Apply display-only mask-k: hide last k stable tokens from display
+        mask_k = self.config.display_mask_k
+        if mask_k > 0:
+            display_len = max(len(self._committed_ids), stable_len - mask_k)
+        else:
+            display_len = stable_len
+
+        if display_len <= len(self._committed_ids):
             # No new stable tokens beyond what we already committed
             return ""
 
-        # Commit the new stable tokens
-        new_stable_ids = new_full_ids[len(self._committed_ids):stable_len]
+        # Commit the new stable tokens (up to display_len)
+        new_stable_ids = new_full_ids[len(self._committed_ids):display_len]
         if not new_stable_ids:
             return ""
 
@@ -423,6 +655,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_full_ids = []
         self._source_words = []
         self._batch_counter = 0
+        self._revision_history = []
 
         if self._ctx is not None:
             ll.free_context(self._ctx)
@@ -437,6 +670,28 @@ class AlignAttLABackend(SimulMTBackend):
     def get_full_translation(self) -> str:
         """Get full committed translation text."""
         return self._committed_text
+
+    def get_revision_history(self) -> List[List[int]]:
+        """Get the revision history for NE metric computation.
+
+        Returns list of full translation token ID lists, one per re-translation step.
+        Use with metrics.compute_normalized_erasure() to measure output stability.
+        """
+        return list(self._revision_history)
+
+    def get_ssbd_stats(self) -> Dict[str, int]:
+        """Get SSBD performance statistics.
+
+        Returns:
+            Dict with draft_tokens (proposed), accepted_tokens, acceptance_rate
+        """
+        total = self._ssbd_draft_tokens
+        accepted = self._ssbd_accepted_tokens
+        return {
+            "draft_tokens": total,
+            "accepted_tokens": accepted,
+            "acceptance_rate": accepted / total if total > 0 else 0.0,
+        }
 
     def close(self):
         """Free all resources."""
