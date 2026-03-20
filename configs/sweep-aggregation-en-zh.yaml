@@ -1,0 +1,27 @@
+# Aggregation method sweep: compare all 6 strategies on EN-ZH
+# Novel research: no published work compares these systematically for SimulMT
+name: sweep-aggregation-en-zh
+backend:
+  type: alignatt
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Compare all 6 aggregation methods with fixed bd=3, wb=3 on EN-ZH.
+  Methods: ts_vote (baseline), softmax_mean, entropy_weighted, consensus, geomean, top_p.
+  Run with: python -m nllw.bench --sweep "agg=ts_vote,softmax_mean,entropy_weighted,consensus,geomean,top_p,ensemble" --lang en-zh --comet --save
+  Hypothesis: entropy_weighted, geomean, and ensemble should be more robust than ts_vote
+  on sentences where some alignment heads are unreliable.
+  Ensemble combines ts_vote (0.4) + entropy_weighted (0.3) + geomean (0.3).
+tags:
+  - sweep
+  - aggregation
+  - novel
+  - en-zh

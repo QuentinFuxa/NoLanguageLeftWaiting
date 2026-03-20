@@ -128,12 +128,13 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~5,400 lines across 16 SimulMT modules, 115 tests
+### What exists now: ~7,200 lines across 19 SimulMT modules, 172 tests
 
-**5 translation backends (registered):**
+**7 translation backends (registered):**
 | Backend | Type | File | Purpose |
 |---------|------|------|---------|
 | `alignatt` | Primary | `nllw/alignatt_backend.py` (462 lines) | Attention-based border detection + entropy veto + KV cache reuse |
+| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~280 lines) | LocalAgreement + AlignAtt: re-translate, diff, commit stable prefix |
 | `wait-k` | Baseline | `nllw/baselines.py` (175 lines) | Standard wait-k policy baseline |
 | `fixed-rate` | Baseline | `nllw/baselines.py` | Fixed-interval emission |
 | `full-sentence` | Baseline | `nllw/alignatt_backend.py` | Quality upper bound (offline) |
@@ -155,16 +156,17 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 201 | Core border detection algorithm |
+| `alignatt.py` | 654 | Core border detection + 7 aggregation methods + dynamic border + ensemble |
 
 **Infrastructure:**
 - `backend_protocol.py` (139 lines) -- SimulMTBackend ABC + `create_backend()` factory
 - `llama_backend.py` (541 lines) -- ctypes wrapper for custom llama.cpp with attention extraction API
+- `alignatt_la_backend.py` (~280 lines) -- LocalAgreement + AlignAtt hybrid backend
 - 22 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
 - Context injection (rolling buffer of previous translations)
+- 7 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, ensemble
 
 **Not yet built (planned):**
-- `alignatt_la_backend.py` -- LocalAgreement hybrid (re-translate + diff)
 - `lora.py` -- LoRA adapter loading
 - Web debug: FastAPI server + MCP server
 
@@ -175,6 +177,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `word_batch` | 3 | wb=2 hallucinates on some inputs; wb=3 safer |
 | `context_window` | 0 | HY-MT: context hurts (-0.028). Qwen3.5: helps (+0.037) |
 | `entropy_veto_threshold` | None | Optional, 0.75 recommended. Catches uncertain tokens. |
+| `aggregation` | "ts_vote" | 7 methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, ensemble |
+| `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |

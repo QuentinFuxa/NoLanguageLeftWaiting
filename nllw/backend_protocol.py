@@ -41,6 +41,10 @@ class BackendConfig:
     use_kvcache: bool = True
     # Entropy veto
     entropy_veto_threshold: Optional[float] = None
+    # Attention aggregation method (ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p)
+    aggregation: str = "ts_vote"
+    # Dynamic border distance (adjusts per-token based on attention entropy)
+    dynamic_border: bool = False
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

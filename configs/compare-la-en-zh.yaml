@@ -1,0 +1,24 @@
+# Compare AlignAtt vs AlignAtt+LocalAgreement on EN-ZH
+# LA should have higher output stability (fewer flickering tokens)
+# at the cost of slightly higher latency
+name: compare-la-en-zh
+backend:
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  context_sentences: 0
+  top_k_heads: 10
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Compare backend_type=alignatt vs alignatt-la on EN-ZH.
+  Run with: python -m nllw.bench --compare alignatt alignatt-la --lang en-zh --comet --save
+  Expect: LA has similar COMET but higher AL/YAAL (more latency).
+  Key metric: output stability (fraction of tokens that don't change).
+tags:
+  - compare
+  - local-agreement
+  - en-zh
