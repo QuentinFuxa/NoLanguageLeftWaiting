@@ -79,6 +79,24 @@ class BackendConfig:
     # Learned during head detection; at runtime uses a fixed reference entropy.
     head_temp_normalize: bool = False
     head_temp_reference: float = 1.5  # Reference entropy (nats) for normalization
+    # Dynamic word_batch: adjust wb based on source sentence length.
+    # Short sentences (< 8 words) -> wb - 1, long (> 20) -> wb + 1.
+    # Gives faster latency on short inputs and safer quality on long ones.
+    dynamic_word_batch: bool = False
+    # Attention information gain: use KL divergence between consecutive
+    # attention snapshots as secondary border signal. Large divergence = new
+    # source info being processed, keep generating. Small divergence = source
+    # exhausted, reinforce border stop. Threshold in nats.
+    info_gain_threshold: Optional[float] = None  # None=disabled, 0.3=recommended
+    # Shift-k adaptive border: shift border_distance per-token based on
+    # cross-attention mass in the border region. Inspired by DrFrattn (EMNLP 2025).
+    # When attention mass in border region is above this threshold, trigger stop.
+    # None=disabled, overrides standard border check when set.
+    shift_k_threshold: Optional[float] = None  # None=disabled, 0.4=recommended
+    # Border confirmation: require N consecutive border hits before stopping.
+    # Prevents false positive stops from transient attention patterns.
+    # 1 = standard (stop on first hit), 2 = require 2 consecutive hits, etc.
+    border_confirm: int = 1  # 1=disabled, 2=recommended for high quality
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

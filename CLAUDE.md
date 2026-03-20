@@ -128,7 +128,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~9,200 lines across 22 SimulMT modules, 290 tests
+### What exists now: ~9,500 lines across 23 SimulMT modules, 352 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -142,7 +142,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 **30+ prompt formats:** hymt, qwen3, qwen3.5, qwen3.5-nothink, eurollm, tower, gemma (per-direction)
 
-**11 research tools:**
+**12 research tools:**
 | Module | Lines | Purpose |
 |--------|-------|---------|
 | `eval.py` | 410 | BLEU/COMET/xCOMET-XL evaluation, parameter sweep |
@@ -152,12 +152,13 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `analysis.py` | 309 | Pareto frontier, edge cases, report generation |
 | `detect_heads.py` | 559 | Auto alignment head detection for any GGUF model |
 | `metrics.py` | 330 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics + NE (Normalized Erasure) |
-| `bench.py` | 310 | Unified one-command benchmarking CLI with sweep, compare, 12+ shortnames |
+| `bench.py` | 340 | Unified one-command benchmarking CLI with sweep, compare, 18+ shortnames |
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 870 | Core border detection + 9 aggregation methods + AMS + temp normalization + gaussian kernel |
+| `alignatt.py` | 1170 | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check |
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
+| `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
@@ -165,7 +166,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - `alignatt_la_backend.py` (~550 lines) -- LocalAgreement + AlignAtt + SSBD hybrid backend
 - 22 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
 - Context injection (rolling buffer of previous translations)
-- 9 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble
+- 10 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, cumulative, ensemble
 - SSBD (Self-Speculative Biased Decoding): previous translation as draft, batch verify, 1.3-1.7x speedup
 - LA Forced Decoding: force-decode committed prefix for consistency + speed (CUNI approach)
 - LA Two-Pass Catch-up: dual re-translation for output stability (lower NE)
@@ -173,10 +174,14 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - Per-head temperature normalization: binary search temperature scaling for fair head weighting
 - Cross-lingual head transfer: validated on 5 models, EuroLLM/HY-MT/Qwen3.5 >97% TS mass transfer
 - Adaptive SSBD Beta: per-token entropy-based bias modulation (confident=lenient, uncertain=strict)
+- Dynamic word_batch: source-length-adaptive batching (short->wb-1, long->wb+1)
+- Attention information gain: KL-divergence border modulation (inhibit/reinforce stops)
+- Shift-k border: attention mass threshold in border region (DrFrattn-inspired)
+- Combined border check: multi-signal fusion (standard + shift-k + info gain)
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
-- Web debug: FastAPI server + MCP server
+- MCP server for editor integration
 
 ### Key parameters and their optimal values
 | Parameter | Default | Notes |
@@ -195,6 +200,10 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `adaptive_aggregation` | False | AMS: per-token aggregation selection based on attention patterns |
 | `head_temp_normalize` | False | Normalize attention sharpness per head before aggregation |
 | `head_temp_reference` | 1.5 | Reference entropy (nats) for temperature normalization |
+| `dynamic_word_batch` | False | Adjust wb by source length: short->wb-1, long->wb+1 |
+| `info_gain_threshold` | None | KL-divergence threshold for border modulation. None=disabled, 0.3=recommended |
+| `shift_k_threshold` | None | Attention mass threshold for border stop. None=disabled, 0.4=recommended |
+| `border_confirm` | 1 | Require N consecutive border hits. 1=disabled, 2=recommended |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 

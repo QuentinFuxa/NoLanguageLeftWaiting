@@ -34,6 +34,9 @@ from .alignatt import (
     aggregate_ts_weighted_vote,
     check_border,
     check_border_dynamic,
+    check_border_combined,
+    check_border_shift_k,
+    compute_dynamic_word_batch,
     compute_entropy,
     is_target_language,
     load_head_config,
@@ -162,6 +165,7 @@ class AlignAttBackend(SimulMTBackend):
         self._source_words: List[str] = []
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
+        self._prev_step_attn: Optional[np.ndarray] = None  # For info gain
 
     def translate(self, source_word: str, is_final: bool = False,
                   emission_time: float = 0.0) -> TranslationStep:
@@ -172,8 +176,15 @@ class AlignAttBackend(SimulMTBackend):
             self._source_words.append(source_word)
             self._batch_counter += 1
 
+            # Dynamic or fixed word batching
+            effective_wb = self.config.word_batch
+            if self.config.dynamic_word_batch:
+                effective_wb = compute_dynamic_word_batch(
+                    self.config.word_batch, len(self._source_words)
+                )
+
             # Word batching: skip until we have enough words
-            if (self._batch_counter < self.config.word_batch
+            if (self._batch_counter < effective_wb
                     and not is_final):
                 return TranslationStep(
                     text="",
@@ -244,6 +255,7 @@ class AlignAttBackend(SimulMTBackend):
             stopped_at_border = False
             is_final_step = is_final
             max_gen = self.config.max_new_per_step if not is_final_step else 256
+            consecutive_border_hits = 0  # For border confirmation
 
             for step in range(max_gen):
                 # logit_idx=0: after decode_single, batch index is always 0
@@ -271,7 +283,27 @@ class AlignAttBackend(SimulMTBackend):
                     )
                     if attn is not None and src_end <= attn.shape[1]:
                         src_attn = attn[:, src_start:src_end]
-                        if self.config.dynamic_border:
+
+                        # Use combined check if shift-k or info-gain enabled
+                        use_combined = (
+                            self.config.shift_k_threshold is not None
+                            or self.config.info_gain_threshold is not None
+                        )
+                        if use_combined:
+                            border_hit, _, _ = check_border_combined(
+                                src_attn, self._ts_scores,
+                                num_src_tokens, self.config.border_distance,
+                                aggregation=self.config.aggregation,
+                                adaptive_aggregation=self.config.adaptive_aggregation,
+                                head_temp_normalize=self.config.head_temp_normalize,
+                                head_temp_reference=self.config.head_temp_reference,
+                                shift_k_threshold=self.config.shift_k_threshold,
+                                prev_attn=self._prev_step_attn,
+                                info_gain_threshold=self.config.info_gain_threshold,
+                                dynamic_border=self.config.dynamic_border,
+                            )
+                            self._prev_step_attn = src_attn.copy()
+                        elif self.config.dynamic_border:
                             border_hit = check_border_dynamic(
                                 src_attn, self._ts_scores,
                                 num_src_tokens, self.config.border_distance,
@@ -290,8 +322,12 @@ class AlignAttBackend(SimulMTBackend):
                                 head_temp_reference=self.config.head_temp_reference,
                             )
                         if border_hit:
-                            stopped_at_border = True
-                            break
+                            consecutive_border_hits += 1
+                            if consecutive_border_hits >= self.config.border_confirm:
+                                stopped_at_border = True
+                                break
+                        else:
+                            consecutive_border_hits = 0
 
                 new_ids.append(next_tok)
 
@@ -360,6 +396,7 @@ class AlignAttBackend(SimulMTBackend):
         # Decode prefix once
         ll.decode_batch_at(self._ctx, self._prefix_tokens, pos_start=0)
         self._prev_source_tokens = []
+        self._prev_step_attn = None
 
     def _handle_segment_end(self):
         """Handle end of a sentence segment."""
