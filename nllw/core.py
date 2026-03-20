@@ -2,7 +2,11 @@ import torch
 import time
 import huggingface_hub
 from dataclasses import dataclass, field
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from transformers import AutoModelForSeq2SeqLM
+try:
+    from transformers import NllbTokenizerFast as NllbTokenizer
+except ImportError:
+    from transformers import AutoTokenizer as NllbTokenizer
 from transformers.cache_utils import EncoderDecoderCache, DynamicCache
 from typing import Tuple, Optional, Dict, Union
 from nllw.timed_text import TimedText
@@ -26,15 +30,15 @@ PUNCTUATION_MARKS = {'.', '!', '?', '。', '！', '？'}
 class TranslationModel:
     translator: Union['ctranslate2.Translator', AutoModelForSeq2SeqLM]
     device: str
-    tokenizer: Dict[str, AutoTokenizer] = field(default_factory=dict)
+    tokenizer: Dict[str, NllbTokenizer] = field(default_factory=dict)
     backend_type: str = 'transformers'
     nllb_size: str = '600M'
     model_name: str = field(default='')
 
-    def get_tokenizer(self, input_lang: str) -> AutoTokenizer:
+    def get_tokenizer(self, input_lang: str) -> NllbTokenizer:
         if not self.tokenizer.get(input_lang):
             model_name = self.model_name or f"facebook/nllb-200-distilled-{self.nllb_size}"
-            self.tokenizer[input_lang] = AutoTokenizer.from_pretrained(
+            self.tokenizer[input_lang] = NllbTokenizer.from_pretrained(
                 model_name,
                 src_lang=input_lang,
                 clean_up_tokenization_spaces=True
@@ -72,7 +76,7 @@ def load_model(src_langs, nllb_backend: str = 'transformers', nllb_size: str = '
     tokenizer = {}
     for src_lang in converted_src_langs:
         if src_lang != 'auto':
-            tokenizer[src_lang] = AutoTokenizer.from_pretrained(
+            tokenizer[src_lang] = NllbTokenizer.from_pretrained(
                 model_name,
                 src_lang=src_lang,
                 clean_up_tokenization_spaces=True
@@ -139,7 +143,7 @@ class TranslationBackend:
         if tokenizer is not None:
             self.tokenizer = tokenizer
         else:
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name, src_lang=source_lang)
+            self.tokenizer = NllbTokenizer.from_pretrained(model_name, src_lang=source_lang)
         
         self.source_lang = source_lang
         self.target_lang = target_lang
