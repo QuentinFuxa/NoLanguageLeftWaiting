@@ -571,6 +571,69 @@ def aggregate_ensemble(
     return float(np.dot(w, positions))
 
 
+def aggregate_cumulative_attention(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    lambda_threshold: float = 0.5,
+) -> int:
+    """Cumulative attention aggregation: DrFrattn-inspired border detection.
+
+    Adapted from DrFrattn (EMNLP 2025, Zhao et al.). Instead of checking where
+    the attention argmax falls, we compute the cumulative attention mass from
+    left to right. The "attended position" is the rightmost position where
+    significant attention mass still remains to the right.
+
+    Formally: for each head, compute c_j = 1 - cumsum(attn[0:j+1]).
+    The "frontier" is the last position j where c_j >= lambda_threshold,
+    meaning the model still has (lambda) fraction of mass beyond position j.
+
+    This captures the distribution SHAPE:
+    - Sharp attention at pos 5: frontier is exactly at 5
+    - Diffuse attention spread over 3-7: frontier depends on lambda
+    - Multi-modal attention (peaks at 2 and 6): captures the rightmost mode
+
+    Key insight: a model that splits attention 40%/40% between positions 5 and 7
+    has frontier at 7, while argmax might pick either. Cumulative correctly
+    identifies the generation frontier.
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+        lambda_threshold: Remaining mass threshold (0.0-1.0, default: 0.5).
+            Lower = more aggressive (earlier frontier).
+            Higher = more conservative (later frontier).
+
+    Returns:
+        Attended source position (int): the attention frontier
+    """
+    n_heads, n_src = src_attn.shape
+    if n_src == 0:
+        return 0
+
+    eps = 1e-10
+    head_positions = []
+
+    for h in range(n_heads):
+        p = src_attn[h] + eps
+        p = p / p.sum()
+        cumsum = np.cumsum(p)
+        remaining = 1.0 - cumsum  # mass remaining to the right
+
+        # Find rightmost position where remaining mass >= lambda
+        candidates = np.where(remaining >= lambda_threshold)[0]
+        if len(candidates) > 0:
+            head_positions.append(int(candidates[-1]))
+        else:
+            # All mass is concentrated at the start
+            head_positions.append(0)
+
+    # TS-weighted vote on frontier positions
+    weighted = {}
+    for h, pos in enumerate(head_positions):
+        weighted[pos] = weighted.get(pos, 0) + ts_scores[h]
+    return max(weighted, key=weighted.get)
+
+
 # Base methods (before ensemble to avoid circular reference)
 _BASE_AGGREGATION_METHODS = {
     "ts_vote": aggregate_ts_weighted_vote,
@@ -581,6 +644,7 @@ _BASE_AGGREGATION_METHODS = {
     "top_p": aggregate_top_p,
     "gaussian_kernel": aggregate_gaussian_kernel,
     "gaussian_kernel_continuous": aggregate_gaussian_kernel_continuous,
+    "cumulative": aggregate_cumulative_attention,
 }
 
 _AGGREGATION_METHODS = {
@@ -876,6 +940,262 @@ def is_target_language(text: str, target_lang: str) -> bool:
         # Latin-script languages (de, fr, it, pt, nl, tr, etc.)
         # Can't distinguish from English by script alone -- always accept
         return True
+
+
+def compute_dynamic_word_batch(
+    base_wb: int,
+    n_source_words: int,
+    short_threshold: int = 8,
+    long_threshold: int = 20,
+) -> int:
+    """Compute dynamic word_batch based on source sentence length.
+
+    Short sentences benefit from smaller batches (lower latency) while
+    long sentences benefit from larger batches (safer, less hallucination).
+
+    Args:
+        base_wb: Base word_batch from config
+        n_source_words: Number of source words seen so far
+        short_threshold: Sentences shorter than this get wb-1 (default: 8)
+        long_threshold: Sentences longer than this get wb+1 (default: 20)
+
+    Returns:
+        Effective word_batch (always >= 1)
+    """
+    if n_source_words < short_threshold:
+        return max(1, base_wb - 1)
+    elif n_source_words > long_threshold:
+        return base_wb + 1
+    return base_wb
+
+
+def compute_attention_info_gain(
+    prev_attn: np.ndarray,
+    curr_attn: np.ndarray,
+    ts_scores: List[float],
+) -> float:
+    """Compute information gain between consecutive attention snapshots.
+
+    Uses TS-weighted KL divergence KL(curr || prev) to measure how much
+    the attention pattern changed. Large divergence means the model is
+    processing new source information (keep generating). Small divergence
+    means the source is exhausted (supports border stop).
+
+    Inspired by LSG (arxiv 2501.00868) which uses KL(P_partial || P_full)
+    for training-free read/write decisions.
+
+    Args:
+        prev_attn: (n_heads, n_src) attention from previous generation step
+        curr_attn: (n_heads, n_src) attention from current generation step
+        ts_scores: TS score per head
+
+    Returns:
+        TS-weighted mean KL divergence in nats. Range: [0, inf)
+        Small values (< 0.3) suggest source is exhausted.
+        Large values (> 1.0) suggest new source info being processed.
+    """
+    n_heads = curr_attn.shape[0]
+    eps = 1e-10
+
+    kl_per_head = np.zeros(n_heads)
+    for h in range(n_heads):
+        p = curr_attn[h] + eps
+        q = prev_attn[h] + eps
+        p = p / p.sum()
+        q = q / q.sum()
+        # KL(p || q) = sum(p * log(p / q))
+        kl_per_head[h] = float(np.sum(p * np.log(p / q)))
+
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < eps:
+        return float(np.mean(kl_per_head))
+    return float(np.dot(ts, kl_per_head) / ts_sum)
+
+
+def check_border_shift_k(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    n_src_tokens: int,
+    border_distance: int,
+    threshold: float = 0.4,
+    head_temp_normalize: bool = False,
+    head_temp_reference: float = 1.5,
+) -> bool:
+    """Shift-k border check: trigger stop when attention mass in border region exceeds threshold.
+
+    Inspired by DrFrattn (EMNLP 2025) "shift-k" mechanism. Instead of checking
+    whether the argmax is in the border region (binary), we measure the total
+    attention MASS in the border region. This is a softer, more robust signal.
+
+    The border region is the last `border_distance` source positions.
+    If the TS-weighted attention mass in this region >= threshold, stop.
+
+    Key insight: a model attending 30% to pos 8 and 30% to pos 9 (border)
+    should stop even if argmax is at pos 8. Pure argmax misses this.
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+        n_src_tokens: Number of source tokens
+        border_distance: Border region width
+        threshold: Mass threshold to trigger stop (0.0-1.0, default: 0.4)
+        head_temp_normalize: If True, normalize head temperatures first
+        head_temp_reference: Reference entropy for normalization
+
+    Returns:
+        True if border mass exceeds threshold (should stop)
+    """
+    border_start = n_src_tokens - border_distance
+    if border_start <= 0:
+        return False
+
+    attn = src_attn
+    if head_temp_normalize:
+        attn = normalize_head_temperatures(attn, head_temp_reference)
+
+    n_heads = attn.shape[0]
+    eps = 1e-10
+
+    # Compute TS-weighted border mass
+    border_mass_per_head = np.zeros(n_heads)
+    for h in range(n_heads):
+        p = attn[h]
+        total = p.sum()
+        if total > eps:
+            p = p / total
+        border_mass_per_head[h] = p[border_start:].sum()
+
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < eps:
+        weighted_mass = float(np.mean(border_mass_per_head))
+    else:
+        weighted_mass = float(np.dot(ts, border_mass_per_head) / ts_sum)
+
+    return weighted_mass >= threshold
+
+
+def check_border_combined(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    n_src_tokens: int,
+    border_distance: int,
+    aggregation: str = "ts_vote",
+    adaptive_aggregation: bool = False,
+    head_temp_normalize: bool = False,
+    head_temp_reference: float = 1.5,
+    shift_k_threshold: Optional[float] = None,
+    prev_attn: Optional[np.ndarray] = None,
+    info_gain_threshold: Optional[float] = None,
+    dynamic_border: bool = False,
+) -> Tuple[bool, Optional[float], Optional[float]]:
+    """Combined border check with all available signals.
+
+    Combines: standard AlignAtt + shift-k mass + info gain.
+    Returns the border decision plus diagnostic values.
+
+    Decision logic:
+        1. If shift_k_threshold is set and border mass >= threshold -> STOP
+        2. If info_gain_threshold is set and info_gain < threshold -> REINFORCE STOP
+           (only stops if standard border also says stop)
+        3. If info_gain > threshold*3 -> INHIBIT STOP (override border if info gain high)
+        4. Standard AlignAtt border check as fallback
+
+    Args:
+        src_attn, ts_scores, n_src_tokens, border_distance: Standard border params
+        aggregation, adaptive_aggregation: Aggregation params
+        head_temp_normalize, head_temp_reference: Temp norm params
+        shift_k_threshold: If set, enable shift-k check
+        prev_attn: Previous step attention (for info gain)
+        info_gain_threshold: If set, enable info gain modulation
+        dynamic_border: If True, use entropy-based dynamic border
+
+    Returns:
+        (border_hit, info_gain_value, border_mass_value)
+    """
+    attn = src_attn
+    if head_temp_normalize:
+        attn = normalize_head_temperatures(attn, head_temp_reference)
+
+    info_gain_val = None
+    border_mass_val = None
+
+    # 1. Compute info gain if available
+    if prev_attn is not None and info_gain_threshold is not None:
+        # Ensure shapes match (prev may have fewer source tokens)
+        if prev_attn.shape[1] <= attn.shape[1]:
+            # Pad prev_attn to match current
+            padded_prev = np.zeros_like(attn)
+            padded_prev[:, :prev_attn.shape[1]] = prev_attn
+            info_gain_val = compute_attention_info_gain(padded_prev, attn, ts_scores)
+        else:
+            info_gain_val = compute_attention_info_gain(
+                prev_attn[:, :attn.shape[1]], attn, ts_scores
+            )
+
+        # High info gain = model processing new info, inhibit stop
+        if info_gain_val > info_gain_threshold * 3:
+            return False, info_gain_val, None
+
+    # 2. Shift-k mass check
+    if shift_k_threshold is not None:
+        shift_k_hit = check_border_shift_k(
+            attn, ts_scores, n_src_tokens, border_distance,
+            threshold=shift_k_threshold,
+            head_temp_normalize=False,  # already done above
+        )
+        # Compute mass for diagnostics
+        border_start = n_src_tokens - border_distance
+        if border_start > 0:
+            eps = 1e-10
+            n_heads = attn.shape[0]
+            mass_per_head = np.zeros(n_heads)
+            for h in range(n_heads):
+                p = attn[h]
+                total = p.sum()
+                if total > eps:
+                    p = p / total
+                mass_per_head[h] = p[border_start:].sum()
+            ts = np.array(ts_scores, dtype=np.float64)
+            ts_sum = ts.sum()
+            if ts_sum > eps:
+                border_mass_val = float(np.dot(ts, mass_per_head) / ts_sum)
+            else:
+                border_mass_val = float(np.mean(mass_per_head))
+
+        if shift_k_hit:
+            # Low info gain reinforces the stop
+            if info_gain_val is not None and info_gain_val < info_gain_threshold:
+                return True, info_gain_val, border_mass_val
+            # Shift-k alone is sufficient
+            return True, info_gain_val, border_mass_val
+
+    # 3. Standard AlignAtt border check
+    method = aggregation
+    if adaptive_aggregation:
+        method = select_adaptive_aggregation(attn, ts_scores)
+
+    if dynamic_border:
+        effective_bd = dynamic_border_distance(
+            attn, ts_scores, border_distance, n_src_tokens,
+        )
+        border_threshold = n_src_tokens - effective_bd
+    else:
+        border_threshold = n_src_tokens - border_distance
+
+    if border_threshold <= 0:
+        return False, info_gain_val, border_mass_val
+
+    attended_pos = aggregate(attn, ts_scores, method=method)
+    standard_hit = attended_pos >= border_threshold
+
+    # Info gain modulation: if standard says stop but info gain is medium-high, override
+    if standard_hit and info_gain_val is not None:
+        if info_gain_val > info_gain_threshold * 1.5:
+            return False, info_gain_val, border_mass_val
+
+    return standard_hit, info_gain_val, border_mass_val
 
 
 def adaptive_border_distance(
