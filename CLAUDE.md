@@ -128,7 +128,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~9,900 lines across 23 SimulMT modules, 396 tests
+### What exists now: ~10,100 lines across 23 SimulMT modules, 441 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -177,8 +177,10 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - Dynamic word_batch: source-length-adaptive batching (short->wb-1, long->wb+1)
 - Attention information gain: KL-divergence border modulation (inhibit/reinforce stops)
 - Shift-k border: attention mass threshold in border region (DrFrattn-inspired)
-- Combined border check: multi-signal fusion (standard + shift-k + info gain)
+- Combined border check: multi-signal fusion (standard + shift-k + info gain + entropy change + prediction stability)
 - LSG logit KL divergence (arxiv 2501.00868): KV cache fork + probe, output logit comparison for border confirmation
+- Entropy change tracking (REINA-inspired, AAAI 2026): cross-step entropy delta as border modulation
+- Prediction stability index (novel): cross-step top-K prediction overlap as border modulation
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
@@ -208,6 +210,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `lsg_kl_threshold` | None | LSG logit KL (arxiv 2501.00868). None=disabled, 7.0=recommended for 7B |
 | `lsg_k` | 3 | Number of source tokens to remove for LSG probe (1-5) |
 | `complexity_adaptive` | False | Per-sentence adaptive bd/wb/gen from text complexity features |
+| `entropy_change_threshold` | None | REINA entropy change (AAAI 2026). None=disabled, -0.5=recommended |
+| `prediction_stability` | False | Cross-step prediction stability modulation. Novel signal |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 
