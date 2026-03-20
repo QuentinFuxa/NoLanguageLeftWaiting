@@ -31,6 +31,7 @@ import numpy as np
 
 from . import llama_backend as ll
 from .alignatt import (
+    aggregate,
     aggregate_ts_weighted_vote,
     check_border,
     check_border_dynamic,
@@ -177,6 +178,8 @@ class AlignAttBackend(SimulMTBackend):
         self._prev_first_token_logits: Optional[np.ndarray] = None
         self._current_entropy_change: Optional[float] = None
         self._current_pred_stability_write: Optional[bool] = None
+        # Attention position history for monotonicity tracking (within generation loop)
+        self._gen_positions_history: List[float] = []
 
     def translate(self, source_word: str, is_final: bool = False,
                   emission_time: float = 0.0) -> TranslationStep:
@@ -303,6 +306,7 @@ class AlignAttBackend(SimulMTBackend):
             is_final_step = is_final
             max_gen = effective_gen_cap if not is_final_step else 256
             consecutive_border_hits = 0  # For border confirmation
+            self._gen_positions_history = []  # Reset per translate() call
 
             for step in range(max_gen):
                 # logit_idx=0: after decode_single, batch index is always 0
@@ -337,8 +341,18 @@ class AlignAttBackend(SimulMTBackend):
                             or self.config.info_gain_threshold is not None
                             or self.config.entropy_change_threshold is not None
                             or self.config.prediction_stability
+                            or self.config.coverage_threshold is not None
+                            or self.config.attention_monotonicity
                         )
                         if use_combined:
+                            # Track attended position for monotonicity
+                            if self.config.attention_monotonicity:
+                                pos_val = float(aggregate(
+                                    src_attn, self._ts_scores,
+                                    method=self.config.aggregation,
+                                ))
+                                self._gen_positions_history.append(pos_val)
+
                             border_hit, _, _ = check_border_combined(
                                 src_attn, self._ts_scores,
                                 num_src_tokens, effective_bd,
@@ -353,6 +367,9 @@ class AlignAttBackend(SimulMTBackend):
                                 entropy_change=self._current_entropy_change,
                                 entropy_change_threshold=self.config.entropy_change_threshold,
                                 pred_stability_write=self._current_pred_stability_write,
+                                coverage_threshold=self.config.coverage_threshold,
+                                positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
+                                monotonicity_enabled=self.config.attention_monotonicity,
                             )
                             self._prev_step_attn = src_attn.copy()
                         elif self.config.dynamic_border:
@@ -550,6 +567,7 @@ class AlignAttBackend(SimulMTBackend):
         self._committed_ids = []
         self._source_words = []
         self._batch_counter = 0
+        self._gen_positions_history = []
 
         if self._ctx is not None:
             ll.free_context(self._ctx)

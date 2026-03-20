@@ -125,6 +125,17 @@ class BackendConfig:
     # = model still adapting (supports READ). Combined with attention border check.
     # False=disabled, True=enabled.
     prediction_stability: bool = False
+    # Source coverage guard (novel): track what fraction of source positions
+    # receive significant attention from alignment heads. If coverage drops
+    # below threshold, force stop (hallucination prevention). When the model
+    # hallucinates, it attends to a narrow source region or ignores source entirely.
+    # None=disabled, 0.3=recommended. Range: 0.1-0.5.
+    coverage_threshold: Optional[float] = None
+    # Attention monotonicity (novel): track how monotonically attention moves
+    # through source during generation. Monotonic attention = straightforward
+    # translation -> tighter border. Non-monotonic = reordering -> wider border.
+    # False=disabled, True=enabled.
+    attention_monotonicity: bool = False
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)
