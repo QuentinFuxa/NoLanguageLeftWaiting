@@ -112,6 +112,37 @@
 - **Per-direction YAML configs** for all 4 IWSLT 2026 directions
 - 86 new tests (581 all passing)
 
+### New in Iteration 12:
+- **Weighted signal fusion framework** (`nllw/fusion.py`, ~600 lines):
+  - Novel: no published work on weighted multi-signal fusion for SimulMT border detection
+  - Replaces boolean cascade (`check_border_combined()`) with principled weighted scoring
+  - 8 signal scorers, each producing continuous [-1, +1] WRITE confidence:
+    - `score_standard_border()`: AlignAtt argmax position (foundation)
+    - `score_shift_k()`: Attention mass in border region
+    - `score_info_gain()`: Attention KL divergence (low = source exhausted)
+    - `score_coverage()`: Source coverage (low = hallucination = force stop)
+    - `score_monotonicity()`: Attention movement regularity
+    - `score_entropy_change()`: REINA entropy delta
+    - `score_pred_stability()`: Prediction stability
+    - `score_attn_shift()`: Cross-step attention position shift
+  - `FusionWeights` dataclass with per-direction defaults (en-zh, en-de, en-it, cs-en, en-fr)
+  - `fused_border_check()`: normalized weighted sum -> threshold decision
+  - `FusionDiagnostic`: per-signal scores, weights, contributions, dominant signal
+  - `calibrate_threshold()`: find optimal threshold from labeled examples
+  - `grid_search_weights()`: optimize weights via grid search + F1 score
+  - Key advantage: weak signals combine (two marginal signals trigger stops neither would alone)
+  - Wired into AlignAtt backend (main loop) + LA backend (`_check_border()`)
+  - `--signal-fusion` CLI, `fusion=0,1` sweep shortname
+  - `--fusion-threshold` CLI, `fthr=-0.2,0.0,0.2` sweep shortname
+- **GPU experiment runner** (`scripts/run_experiments.sh`):
+  - Phase 1: Basic validation (~5 min)
+  - Phase 2: Signal sweeps (~30 min)
+  - Phase 3: Full Pareto + multi-direction (~2 hours)
+  - Phase 4: Fusion experiments (~30 min)
+  - Phase 5: All above
+  - Auto-logging, machine-aware, COMET-optional
+- 72 new tests (653 all passing)
+
 ## What to do next
 
 ### Priority 1: Run experiments on A40 (ALL code is ready, NOTHING tested on GPU yet)
@@ -182,6 +213,26 @@ python -m nllw.bench --repetition-halt 2 --shift-k 0.4 --coverage-threshold 0.3 
 
 # 1o. All signals combined (iterations 7-11)
 python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --repetition-halt 2 --lang en-zh --comet --save
+
+# 1p. Signal fusion (new in iteration 12)
+python -m nllw.bench --signal-fusion --lang en-zh --comet --save
+python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save
+python -m nllw.bench --signal-fusion --sweep "fthr=-0.2,0.0,0.2,0.4" --lang en-zh --comet --save
+
+# 1q. Fusion vs boolean cascade (same signals, different decision logic)
+python -m nllw.bench --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save
+python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save
+
+# 1r. Fusion per direction
+python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-de --comet --save
+python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-it --comet --save
+python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang cs-en --comet --save
+
+# 1s. Full fusion with all signals
+python -m nllw.bench --signal-fusion --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --repetition-halt 2 --attention-shift --lang en-zh --comet --save
+
+# OR use the experiment runner script:
+./scripts/run_experiments.sh 4 --lang en-zh --model /path/to/model.gguf --comet
 ```
 
 ### Priority 2: IWSLT 2026 Competition Integration (URGENT -- eval April 1-15)
@@ -214,7 +265,8 @@ python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy
 - LA backend retranslation priority: SSBD > forced_decode > standard
 - Two-pass uses pass 1 (SSBD/forced/standard) + pass 2 (always standard) for diversity
 - `_check_border()` helper centralizes all border check params (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability)
-- `check_border_combined()` fuses multiple signals: standard + shift-k mass + info gain + entropy change + prediction stability + source coverage guard + attention monotonicity
+- `check_border_combined()` fuses multiple signals via boolean cascade: standard + shift-k mass + info gain + entropy change + prediction stability + source coverage guard + attention monotonicity
+- `fused_border_check()` (iter 12) replaces boolean cascade with weighted scoring: each signal -> [-1,+1] score -> weighted sum -> threshold decision. Per-direction weight profiles.
 - Cross-lingual head transfer: most models have >90% TS mass transfer across pairs
 - **LSG probe uses seq_id=1 fork**: `memory_seq_cp(0, 1)` + `memory_seq_rm(1, ...)` + re-decode + cleanup. Zero impact on main seq 0.
 - **Cross-step signals**: entropy change and prediction stability are computed once per translate() call (not per generation step). They modulate the border decision from attention-based checks.
@@ -237,6 +289,10 @@ python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy
 - **New iter11 params**: `repetition_max_repeats` (None=disabled, 2=recommended), `attention_shift` (False=disabled)
 - **New iter11 sweeps**: `rep=2,3,4`, `attshift=0,1`
 - **New iter11 module**: `nllw/simulstream.py` -- SimulStream SpeechProcessor wrapper for IWSLT 2026
+- **New iter12 params**: `signal_fusion` (False=disabled, True=use weighted fusion), `fusion_threshold` (0.0=balanced)
+- **New iter12 sweeps**: `fusion=0,1`, `fthr=-0.2,0.0,0.2,0.4`
+- **New iter12 module**: `nllw/fusion.py` -- Weighted signal fusion (8 scorers + FusionWeights + FusionDiagnostic + calibration)
+- **New iter12 script**: `scripts/run_experiments.sh` -- Automated 4-phase GPU experiment runner
 - **Key insight (iter11)**: Attention shift is a CROSS-STEP, INPUT-SPACE signal -- the only quadrant missing from our taxonomy. It measures how much the model's SOURCE focus changes between consecutive translate() calls, orthogonal to within-step signals and output-space signals.
 - **Key insight**: Entropy change and prediction stability are OUTPUT-SPACE cross-step signals, orthogonal to attention-based within-step signals. They measure whether the MODEL'S BEHAVIOR changed after adding a new source word.
 - **Key insight (iter10)**: Source coverage is an INPUT-SPACE within-step signal -- it measures whether the model is grounded in ALL the source, not just which position it attends to. Orthogonal to argmax-based border detection.
@@ -269,5 +325,7 @@ python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy
   - Cross-step, input-space: attention shift tracking (iter 11) -- COMPLETES TAXONOMY
   - Cross-step, output-space: entropy change (REINA), prediction stability
   - Cross-step, output-logit: LSG logit KL divergence
+- **Open gap (iter12)**: No published work on weighted multi-signal fusion for SimulMT border detection. Closest: DrFrattn (single aggregated signal), LSG (independent logit KL check)
+- **Key insight (iter12)**: Boolean cascade has fundamental limitation: signal ORDER determines priority, and two "weak" signals can never combine. Weighted fusion fixes both: order-independent, weak signals combine naturally.
 - **Hikari** is main competitor: policy-free WAIT tokens
 - **IWSLT 2026 metrics**: LongYAAL (primary latency), XCOMET-XL (primary quality)

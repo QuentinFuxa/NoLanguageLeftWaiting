@@ -55,6 +55,7 @@ from .alignatt import (
     prediction_stability_supports_write,
 )
 from .complexity import adaptive_params_from_complexity
+from .fusion import fused_border_check, get_fusion_weights
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
 from .backend_protocol import (
     SimulMTBackend,
@@ -375,8 +376,58 @@ class AlignAttLABackend(SimulMTBackend):
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
-        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability, coverage, monotonicity, attention shift)."""
+        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability, coverage, monotonicity, attention shift, fusion)."""
         bd = getattr(self, '_effective_bd', self.config.border_distance)
+
+        # Signal fusion mode: weighted scoring replaces boolean cascade
+        if self.config.signal_fusion:
+            if self.config.attention_monotonicity:
+                pos_val = float(aggregate(
+                    src_attn, self._ts_scores,
+                    method=self.config.aggregation,
+                ))
+                self._gen_positions_history.append(pos_val)
+
+            direction = self.config.direction
+            weights = get_fusion_weights(direction)
+            if self.config.shift_k_threshold is None:
+                weights.shift_k = 0.0
+            if self.config.info_gain_threshold is None:
+                weights.info_gain = 0.0
+            if self.config.coverage_threshold is None:
+                weights.coverage = 0.0
+            if not self.config.attention_monotonicity:
+                weights.monotonicity = 0.0
+            if self.config.entropy_change_threshold is None:
+                weights.entropy_change = 0.0
+            if not self.config.prediction_stability:
+                weights.pred_stability = 0.0
+            if not self.config.attention_shift:
+                weights.attn_shift = 0.0
+
+            hit, _diag = fused_border_check(
+                src_attn, self._ts_scores,
+                num_src_tokens, bd,
+                weights=weights,
+                threshold=self.config.fusion_threshold,
+                aggregation=self.config.aggregation,
+                adaptive_aggregation=self.config.adaptive_aggregation,
+                head_temp_normalize=self.config.head_temp_normalize,
+                head_temp_reference=self.config.head_temp_reference,
+                shift_k_ref=self.config.shift_k_threshold or 0.4,
+                prev_attn=getattr(self, '_prev_step_attn', None),
+                info_gain_ref=self.config.info_gain_threshold or 0.3,
+                dynamic_border=self.config.dynamic_border,
+                coverage_ref=self.config.coverage_threshold or 0.3,
+                positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
+                entropy_change=self._current_entropy_change,
+                entropy_change_ref=self.config.entropy_change_threshold or -0.5,
+                pred_stability_write=self._current_pred_stability_write,
+                attn_shift_write=getattr(self, '_current_attn_shift_write', None) if self.config.attention_shift else None,
+            )
+            self._prev_step_attn = src_attn.copy()
+            return hit
+
         # Use combined check if any multi-signal feature enabled
         use_combined = (
             self.config.shift_k_threshold is not None

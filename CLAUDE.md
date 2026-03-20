@@ -128,7 +128,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~11,000 lines across 26 SimulMT modules, 581 tests
+### What exists now: ~12,000 lines across 27 SimulMT modules, 653 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -160,6 +160,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
 | `simulstream.py` | 420 | SimulStream SpeechProcessor wrapper for IWSLT 2026 submission |
+| `fusion.py` | 600 | Weighted signal fusion: 8 signals -> continuous scores -> weighted sum -> border decision |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
@@ -184,6 +185,11 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - Prediction stability index (novel): cross-step top-K prediction overlap as border modulation
 - Source coverage guard (novel): attention coverage tracking for hallucination prevention
 - Attention monotonicity (novel): dynamic border adjustment from attention movement patterns
+- **Weighted signal fusion** (novel, iteration 12): replaces boolean cascade with continuous scoring + weighted sum
+  - 8 signal scorers: standard, shift_k, info_gain, coverage, monotonicity, entropy_change, pred_stability, attn_shift
+  - FusionWeights per direction, FusionDiagnostic for observability
+  - calibrate_threshold() and grid_search_weights() for auto-tuning
+  - Key advantage: weak signals combine (two marginal signals trigger stops neither would alone)
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
@@ -219,6 +225,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `attention_monotonicity` | False | Attention monotonicity-based border adjustment. Novel signal |
 | `repetition_max_repeats` | None | N-gram repetition halt. None=disabled, 2=recommended. Hallucination prevention |
 | `attention_shift` | False | Cross-step attention position shift tracking. Novel signal |
+| `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
+| `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 
@@ -314,4 +322,12 @@ python -m nllw.simulate "the president of france announced reforms" --configs '{
 
 # Convert traces to OmniSTEval JSONL
 python -m nllw.omnisteval traces.json --talk-id demo --source-length 120.5 -o output.jsonl
+
+# Signal fusion mode (replaces boolean cascade with weighted scoring)
+python -m nllw.bench --signal-fusion --lang en-zh --comet --save
+python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save
+python -m nllw.bench --signal-fusion --sweep "fthr=-0.2,0.0,0.2,0.4" --lang en-zh --comet --save
+
+# Automated experiment runner (GPU machines)
+./scripts/run_experiments.sh 1 --lang en-zh --model /path/to/model.gguf --comet
 ```
