@@ -1,0 +1,24 @@
+# IWSLT 2026 SST -- EN-DE optimal configuration
+# Model: HY-MT1.5-7B-Q8_0.gguf
+# Best result (iwslt26-sst): XCOMET-XL 0.786
+
+model_path: /app/models/hymt1.5-7b-q8_0.gguf
+heads_path: /app/heads/translation_heads_hymt_en_de.json
+direction: en-de
+backend_type: alignatt
+prompt_format: hymt
+border_distance: 3
+word_batch: 2
+context_sentences: 0
+n_ctx: 2048
+top_k_heads: 10
+
+# Recommended signals (to be validated on GPU)
+# shift_k_threshold: 0.4
+# coverage_threshold: 0.3
+# repetition_max_repeats: 2
+
+# SimulStream settings
+sample_rate: 16000
+min_start_seconds: 0.5
+speech_chunk_size: 960

@@ -75,6 +75,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "predstab": "prediction_stability",
         "cov": "coverage_threshold",
         "mono": "attention_monotonicity",
+        "rep": "repetition_max_repeats",
+        "attshift": "attention_shift",
     }
 
     grid = {}
@@ -135,6 +137,8 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "prediction_stability": args.prediction_stability,
         "coverage_threshold": args.coverage_threshold,
         "attention_monotonicity": args.attention_monotonicity,
+        "repetition_max_repeats": args.repetition_halt,
+        "attention_shift": args.attention_shift,
     }
 
 
@@ -321,6 +325,10 @@ def main():
                         help="Source coverage guard threshold (0.3=recommended, None=disabled)")
     parser.add_argument("--attention-monotonicity", action="store_true",
                         help="Enable attention monotonicity-based border distance adjustment")
+    parser.add_argument("--repetition-halt", type=int, default=None,
+                        help="N-gram repetition halt threshold (2=recommended, None=disabled)")
+    parser.add_argument("--attention-shift", action="store_true",
+                        help="Enable cross-step attention shift tracking")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

@@ -128,7 +128,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~10,300 lines across 23 SimulMT modules, 495 tests
+### What exists now: ~11,000 lines across 26 SimulMT modules, 581 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -156,9 +156,10 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 1465+ | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL + source coverage + monotonicity |
+| `alignatt.py` | 1750+ | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL + source coverage + monotonicity + n-gram repetition |
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
+| `simulstream.py` | 420 | SimulStream SpeechProcessor wrapper for IWSLT 2026 submission |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
@@ -216,6 +217,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `prediction_stability` | False | Cross-step prediction stability modulation. Novel signal |
 | `coverage_threshold` | None | Source coverage guard. None=disabled, 0.3=recommended. Hallucination prevention |
 | `attention_monotonicity` | False | Attention monotonicity-based border adjustment. Novel signal |
+| `repetition_max_repeats` | None | N-gram repetition halt. None=disabled, 2=recommended. Hallucination prevention |
+| `attention_shift` | False | Cross-step attention position shift tracking. Novel signal |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 

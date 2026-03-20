@@ -85,6 +85,33 @@
 - Both signals wired into AlignAtt and AlignAtt-LA backends
 - 54 new tests (495 all passing)
 
+### New in Iteration 11:
+- **N-gram repetition detection** (novel, no published work):
+  - `detect_ngram_repetition()` in alignatt.py: check 2-4gram repetition in generated tokens
+  - `compute_repetition_score()`: continuous 0-1 quality score for generation monitoring
+  - Within-step, output-space signal -- catches degenerate repetitive hallucination loops
+  - Wired into AlignAtt backend (main loop) + all 3 LA retranslation methods (standard, forced, SSBD)
+  - `--repetition-halt 2` CLI, `rep=2,3,4` sweep shortname
+  - Zero overhead: simple tuple matching on last few tokens
+- **SimulStream wrapper** (`nllw/simulstream.py`):
+  - `NLLWSpeechProcessor` wraps any NLLW backend as SimulStream SpeechProcessor
+  - Audio mode: `process_chunk(waveform)` -> buffer -> ASR -> MT -> IncrementalOutput
+  - Text mode: `process_words(words)` -> MT -> IncrementalOutput (for eval/testing)
+  - `end_of_stream()`, `clear()` for stream lifecycle
+  - `SimulStreamConfig` with YAML support, `DIRECTION_DEFAULTS` for all 4 IWSLT directions
+  - `process_gold_transcript()`: JSONL-in/JSONL-out eval pipeline
+  - CLI: `python -m nllw.simulstream --model X --lang en-zh --test`
+- **Attention shift tracking** (novel, no published work):
+  - `compute_attention_shift()` in alignatt.py: TS-weighted position delta across translate() calls
+  - Cross-step, input-space signal -- completes the signal taxonomy
+  - Large shift = model consuming source (WRITE). Small = stuck (READ more)
+  - Pre-filter in `check_border_combined()` (step 0a2, after REINA, before coverage)
+  - Wired into AlignAtt and AlignAtt-LA backends
+  - `--attention-shift` CLI, `attshift=0,1` sweep shortname
+- **Dockerfile** for IWSLT 2026 submission (multi-stage, CUDA 12.4, H100)
+- **Per-direction YAML configs** for all 4 IWSLT 2026 directions
+- 86 new tests (581 all passing)
+
 ## What to do next
 
 ### Priority 1: Run experiments on A40 (ALL code is ready, NOTHING tested on GPU yet)
@@ -147,13 +174,22 @@ python -m nllw.bench --attention-monotonicity --coverage-threshold 0.3 --lang en
 # 1m. Full iteration 10 sweep
 python -m nllw.bench --sweep "cov=0.3 mono=0,1 shiftk=0.4" --lang en-zh --comet --save
 python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --lang en-zh --comet --save
+
+# 1n. N-gram repetition detection (new in iteration 11)
+python -m nllw.bench --repetition-halt 2 --lang en-zh --comet --save
+python -m nllw.bench --sweep "rep=2,3,4" --lang en-zh --comet --save
+python -m nllw.bench --repetition-halt 2 --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save
+
+# 1o. All signals combined (iterations 7-11)
+python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --repetition-halt 2 --lang en-zh --comet --save
 ```
 
 ### Priority 2: IWSLT 2026 Competition Integration (URGENT -- eval April 1-15)
-- **SimulStream wrapper**: Subclass `SpeechProcessor`, implement `process_chunk()` + `end_of_stream()`
+- **SimulStream wrapper**: DONE (iteration 11). `nllw/simulstream.py` wraps NLLW as SimulStream SpeechProcessor. Needs ASR integration + GPU E2E test.
 - **OmniSTEval compatibility**: Verify `omnisteval.py` output with latest `omnisteval longform` + XCOMET-XL
 - **Docker on H100 80GB**: Q8_0 7B GGUF = ~8GB, package llama.cpp + model + NLLW
 - **EN->IT is new for 2026** (replaces EN->JP). We have corpus + head configs ready.
+- **ASR integration**: Wire Qwen3-ASR into `NLLWSpeechProcessor._run_asr()` for full audio pipeline.
 - **Key strategic insight**: CUNI won 2025 but could NOT use AlignAtt with EuroLLM (no attention extraction in CTranslate2). We CAN use AlignAtt with ANY model via llama.cpp -- unique advantage.
 
 ### Priority 3: Further optimizations
@@ -198,6 +234,10 @@ python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy
 - **New iter9 sweeps**: `entchg=-0.3,-0.5,-1.0`, `predstab=0,1`
 - **New iter10 params**: `coverage_threshold` (None=disabled, 0.3=recommended), `attention_monotonicity` (False=disabled)
 - **New iter10 sweeps**: `cov=0.2,0.3,0.4`, `mono=0,1`
+- **New iter11 params**: `repetition_max_repeats` (None=disabled, 2=recommended), `attention_shift` (False=disabled)
+- **New iter11 sweeps**: `rep=2,3,4`, `attshift=0,1`
+- **New iter11 module**: `nllw/simulstream.py` -- SimulStream SpeechProcessor wrapper for IWSLT 2026
+- **Key insight (iter11)**: Attention shift is a CROSS-STEP, INPUT-SPACE signal -- the only quadrant missing from our taxonomy. It measures how much the model's SOURCE focus changes between consecutive translate() calls, orthogonal to within-step signals and output-space signals.
 - **Key insight**: Entropy change and prediction stability are OUTPUT-SPACE cross-step signals, orthogonal to attention-based within-step signals. They measure whether the MODEL'S BEHAVIOR changed after adding a new source word.
 - **Key insight (iter10)**: Source coverage is an INPUT-SPACE within-step signal -- it measures whether the model is grounded in ALL the source, not just which position it attends to. Orthogonal to argmax-based border detection.
 - **Key insight (iter10)**: Attention monotonicity is a TEMPORAL within-step signal -- it measures attention DYNAMICS across generation steps, not static attention at a single step.
@@ -219,10 +259,14 @@ python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy
 - **Open gap**: No published work on entropy change as cross-step border modulation (our REINA integration is novel extension)
 - **Open gap**: No published work on attention coverage as hallucination guard for SimulMT (our coverage guard is novel)
 - **Open gap**: No published work on attention monotonicity scoring for decoder-only LLM SimulMT (our monotonicity metric is novel)
-- **Signal taxonomy (iteration 10)**:
+- **Open gap (iter11)**: No published work on n-gram repetition detection as halt signal in SimulMT
+- **Open gap (iter11)**: No published work on cross-step attention position shift for SimulMT border detection
+- **Signal taxonomy (iteration 11 -- COMPLETE)**:
   - Within-step, position-based: standard AlignAtt, shift-k mass, info gain, AMS
   - Within-step, input-coverage: source coverage guard (iter 10)
   - Within-step, temporal: attention monotonicity (iter 10)
+  - Within-step, output-space: n-gram repetition detection (iter 11)
+  - Cross-step, input-space: attention shift tracking (iter 11) -- COMPLETES TAXONOMY
   - Cross-step, output-space: entropy change (REINA), prediction stability
   - Cross-step, output-logit: LSG logit KL divergence
 - **Hikari** is main competitor: policy-free WAIT tokens

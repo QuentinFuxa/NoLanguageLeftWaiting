@@ -33,15 +33,18 @@ from . import llama_backend as ll
 from .alignatt import (
     aggregate,
     aggregate_ts_weighted_vote,
+    attention_shift_supports_write,
     check_border,
     check_border_dynamic,
     check_border_combined,
     check_border_shift_k,
+    compute_attention_shift,
     compute_dynamic_word_batch,
     compute_entropy,
     compute_entropy_change,
     compute_logit_kl,
     compute_prediction_stability,
+    detect_ngram_repetition,
     entropy_change_supports_write,
     is_target_language,
     load_head_config,
@@ -178,6 +181,9 @@ class AlignAttBackend(SimulMTBackend):
         self._prev_first_token_logits: Optional[np.ndarray] = None
         self._current_entropy_change: Optional[float] = None
         self._current_pred_stability_write: Optional[bool] = None
+        # Cross-step attention shift tracking
+        self._prev_translate_attn: Optional[np.ndarray] = None
+        self._current_attn_shift_write: Optional[bool] = None
         # Attention position history for monotonicity tracking (within generation loop)
         self._gen_positions_history: List[float] = []
 
@@ -300,6 +306,23 @@ class AlignAttBackend(SimulMTBackend):
                         )
                         self._prev_first_token_logits = first_logits.copy()
 
+            # Cross-step attention shift: compare attention before generation
+            if self.config.attention_shift and num_src_tokens > 0:
+                ctx_size = ll.n_ctx(self._ctx)
+                pre_gen_attn = ll.get_attn_weights(
+                    self._ctx, 0, self._n_heads, ctx_size
+                )
+                if pre_gen_attn is not None and src_end <= pre_gen_attn.shape[1]:
+                    cur_src_attn = pre_gen_attn[:, src_start:src_end]
+                    shift_val = compute_attention_shift(
+                        cur_src_attn, self._prev_translate_attn,
+                        self._ts_scores,
+                    )
+                    self._current_attn_shift_write = (
+                        attention_shift_supports_write(shift_val)
+                    )
+                    self._prev_translate_attn = cur_src_attn.copy()
+
             # Generate tokens
             new_ids = []
             stopped_at_border = False
@@ -313,6 +336,16 @@ class AlignAttBackend(SimulMTBackend):
                 next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
                 if next_tok in self._stop_ids or next_tok < 0:
                     break
+
+                # N-gram repetition detection: halt on degenerate loops
+                if (self.config.repetition_max_repeats is not None
+                        and len(new_ids) >= 4):
+                    if detect_ngram_repetition(
+                        new_ids + [next_tok],
+                        max_repeats=self.config.repetition_max_repeats,
+                    ):
+                        stopped_at_border = True
+                        break
 
                 # Entropy veto
                 if self.config.entropy_veto_threshold is not None:
@@ -343,6 +376,7 @@ class AlignAttBackend(SimulMTBackend):
                             or self.config.prediction_stability
                             or self.config.coverage_threshold is not None
                             or self.config.attention_monotonicity
+                            or self.config.attention_shift
                         )
                         if use_combined:
                             # Track attended position for monotonicity
@@ -370,6 +404,7 @@ class AlignAttBackend(SimulMTBackend):
                                 coverage_threshold=self.config.coverage_threshold,
                                 positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
                                 monotonicity_enabled=self.config.attention_monotonicity,
+                                attn_shift_write=self._current_attn_shift_write if self.config.attention_shift else None,
                             )
                             self._prev_step_attn = src_attn.copy()
                         elif self.config.dynamic_border:
@@ -545,6 +580,8 @@ class AlignAttBackend(SimulMTBackend):
         self._prev_first_token_logits = None
         self._current_entropy_change = None
         self._current_pred_stability_write = None
+        self._prev_translate_attn = None
+        self._current_attn_shift_write = None
 
     def _handle_segment_end(self):
         """Handle end of a sentence segment."""
