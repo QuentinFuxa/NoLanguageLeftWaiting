@@ -163,6 +163,62 @@ Could complement AlignAtt but doubles compute per step.
 - Zero-shot voice cloning, full-duplex
 - Sets commercial viability benchmark
 
+### NEW (Iteration 6 Survey) -- High Priority
+
+**AliBaStr-MT** (arxiv 2503.22051, Apple, Mar 2025)
+- Trains 6M-param binary classifier on cross-attention alignment pseudo-labels
+- Tunable delta threshold at inference (like our border_distance but learned)
+- EN-ES 30.44 BLEU, narrowing gap to offline (32.4)
+- **Action**: Could distill our TS-scored alignment data into training labels for a learned border
+
+**REINA** (arxiv 2508.04946, AAAI 2026 Oral)
+- Information-theoretic policy: "wait only if reading more input decreases entropy"
+- 21% improvement in latency/quality tradeoff
+- Extends our `entropy_veto_threshold` with principled information gain
+- **Action**: Compare H(token|partial) vs H(token|full) -- if delta is small, WRITE now
+
+**DrFrattn** (EMNLP 2025, ACL Anthology 2025.emnlp-main.1767)
+- Learns adaptive READ/WRITE policy directly from attention with "Shift-k" mechanism
+- Closest published work to our AlignAtt approach but with learned thresholds
+- **Action**: Must-read. Shift-k could improve our dynamic_border implementation
+
+**StreamingThinker** (arxiv 2510.17238, ICLR 2026)
+- Parallel KV caches decouple source encoding from generation
+- 80% reduction in pre-reasoning latency, 60% total latency reduction
+- **Action**: Parallel KV streams could enable true incremental source processing
+
+**Group Position Encoding** (arxiv 2505.16983, ACL 2025, code available)
+- Separate position IDs for source and target groups -- no retraining needed
+- Eliminates positional interference when source grows incrementally
+- Code: github.com/EIT-NLP/StreamingLLM
+- **Action**: Implementable in llama.cpp with position ID manipulation. HIGH priority.
+
+**Learning to Draft** (arxiv 2603.01639, ICLR 2026)
+- RL-based speculative decoding: 2.24-4.32x speedup, +36.4% vs EAGLE-3
+- **Action**: Could RL-optimize SSBD beta per-context instead of fixed 0.2
+
+### NEW (Iteration 6 Survey) -- Medium Priority
+
+**SimulMask** (arxiv 2405.10443, EMNLP 2024)
+- Modify attention mask during SFT to enforce SimulMT policy (simpler than EAST)
+- Works with LoRA fine-tuning. **Action**: If fine-tuning HY-MT for SimulMT
+
+**DPO Segmentation** (arxiv 2510.12195, Oct 2025)
+- DPO-tune LLM to predict optimal chunk boundaries for translation quality
+- **Action**: Could replace fixed word_batch with learned segmentation
+
+**RASST** (arxiv 2601.22777, Jan 2026)
+- Retrieval-augmented SimulMT: +3 BLEU, +16% terminology accuracy
+- **Action**: For IWSLT 2026 "Extra Context" subtrack
+
+**PEARL** (arxiv 2408.11850, ICLR 2025, code: github.com/smart-lty/ParallelSpeculativeDecoding)
+- Pre-verify + post-verify for speculative decoding. Adaptive draft length
+- **Action**: Could extend SSBD with pre-verification during drafting
+
+**Nightjar** (arxiv 2512.22420, Dec 2025)
+- MAB planner for dynamic speculative length selection per batch
+- **Action**: Decide whether to use SSBD at all per sentence
+
 ### IWSLT 2026 Update
 - **Baselines repo**: github.com/owaski/iwslt-2026-baselines
   - Qwen3-ASR-1.7B + Qwen3-4B-Instruct-2507
@@ -173,7 +229,7 @@ Could complement AlignAtt but doubles compute per step.
 
 ## Research Opportunities for NLLW
 
-### Implemented (Iterations 1-5):
+### Implemented (Iterations 1-6):
 1. ~~SSBD for accelerating alignatt-la re-translation~~ DONE (Iteration 4)
 2. ~~Attention entropy as dynamic border distance~~ DONE (Iteration 3)
 3. ~~NE (Normalized Erasure) metric~~ DONE (Iteration 4)
@@ -181,21 +237,32 @@ Could complement AlignAtt but doubles compute per step.
 5. ~~Gaussian kernel consensus aggregation~~ DONE (Iteration 5)
 6. ~~LA forced decoding (CUNI approach)~~ DONE (Iteration 5)
 7. ~~Display-only mask-k~~ DONE (Iteration 4)
+8. ~~LA two-pass catch-up~~ DONE (Iteration 6)
+9. ~~Adaptive Multi-Strategy (AMS) aggregation~~ DONE (Iteration 6)
+10. ~~Per-head temperature normalization~~ DONE (Iteration 6)
+11. ~~Cross-lingual head transfer analysis~~ DONE (Iteration 6) -- **confirmed: EuroLLM/HY-MT/Qwen3.5 >97% TS mass transfer**
 
 ### High priority (to investigate):
 1. **ExPosST position slot reservation** -- eliminates KV recomputation entirely
 2. **Group Position Encoding** (ACL 2025) -- simpler alternative, code available
 3. **GRPO fine-tuning** (SeqPO-SiMT/Hibiki-Zero) -- RL-optimize READ/WRITE decisions
 4. **Syntax-aware chunking** (SASST) -- replace fixed word_batch with dependency-aware chunking
-5. **Cross-lingual head transfer** -- do EN-ZH heads work for EN-DE?
-6. **SSD parallel speculation** -- extend SSBD to pre-compute multiple draft continuations
-7. **Human-like strategies** (Sentence_Cut, Drop) -- aggressive latency reduction
+5. **SSD parallel speculation** -- extend SSBD to pre-compute multiple draft continuations
+6. **Human-like strategies** (Sentence_Cut, Drop) -- aggressive latency reduction
+
+### Additional references from cross-lingual research:
+- **arXiv 2502.11806** -- "Exploring the Translation Mechanism of LLMs": >70% head overlap for same-source pairs via subspace-intervened path patching. 64 heads sufficient for full translation quality.
+- **arXiv 2511.07498** -- "Focusing on Language" (LAHIS): ~1% language-general heads, only 14-20 params for per-language adaptation.
+- **arXiv 2602.16740** -- "Attention Head Stability": middle-layer heads least stable across seeds, but stable within a model.
 
 ### Our advantages:
 - AlignAtt validated by IWSLT 2025 winner (CUNI)
 - Translation Heads paper (ICLR 2026) validates our TS scoring
 - KV cache reuse already implemented (3-5x speedup)
 - SSBD + adaptive beta implemented (expected 1.3-1.7x additional speedup)
-- 9 novel aggregation methods (no published baselines)
-- LA forced decoding for consistency (CUNI approach)
+- 9 novel aggregation methods + AMS auto-selection (no published baselines)
+- LA forced decoding + two-pass for consistency (CUNI approach)
+- Per-head temperature normalization for fair aggregation
+- Cross-lingual head transfer validated: most models need only 1 detection run
 - HY-MT1.5-7B: 0.842 XCOMET-XL EN-ZH (strong baseline)
+- **NLLW is the first system applying AlignAtt to decoder-only LLMs for SimulMT**

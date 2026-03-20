@@ -128,13 +128,13 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~8,300 lines across 21 SimulMT modules, 244 tests
+### What exists now: ~9,200 lines across 22 SimulMT modules, 290 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
 |---------|------|------|---------|
 | `alignatt` | Primary | `nllw/alignatt_backend.py` (462 lines) | Attention-based border detection + entropy veto + KV cache reuse |
-| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~750 lines) | LocalAgreement + AlignAtt + SSBD + forced decoding + adaptive SSBD |
+| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~900 lines) | LA + AlignAtt + SSBD + forced decoding + adaptive SSBD + two-pass |
 | `wait-k` | Baseline | `nllw/baselines.py` (175 lines) | Standard wait-k policy baseline |
 | `fixed-rate` | Baseline | `nllw/baselines.py` | Fixed-interval emission |
 | `full-sentence` | Baseline | `nllw/alignatt_backend.py` | Quality upper bound (offline) |
@@ -152,11 +152,12 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `analysis.py` | 309 | Pareto frontier, edge cases, report generation |
 | `detect_heads.py` | 559 | Auto alignment head detection for any GGUF model |
 | `metrics.py` | 330 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics + NE (Normalized Erasure) |
-| `bench.py` | 264 | Unified one-command benchmarking CLI with sweep, compare |
+| `bench.py` | 310 | Unified one-command benchmarking CLI with sweep, compare, 12+ shortnames |
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 746 | Core border detection + 9 aggregation methods + dynamic border + ensemble + gaussian kernel |
+| `alignatt.py` | 870 | Core border detection + 9 aggregation methods + AMS + temp normalization + gaussian kernel |
+| `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
@@ -167,6 +168,10 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - 9 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble
 - SSBD (Self-Speculative Biased Decoding): previous translation as draft, batch verify, 1.3-1.7x speedup
 - LA Forced Decoding: force-decode committed prefix for consistency + speed (CUNI approach)
+- LA Two-Pass Catch-up: dual re-translation for output stability (lower NE)
+- Adaptive Multi-Strategy (AMS): per-token aggregation selection based on attention patterns
+- Per-head temperature normalization: binary search temperature scaling for fair head weighting
+- Cross-lingual head transfer: validated on 5 models, EuroLLM/HY-MT/Qwen3.5 >97% TS mass transfer
 - Adaptive SSBD Beta: per-token entropy-based bias modulation (confident=lenient, uncertain=strict)
 
 **Not yet built (planned):**
@@ -180,12 +185,16 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `word_batch` | 3 | wb=2 hallucinates on some inputs; wb=3 safer |
 | `context_window` | 0 | HY-MT: context hurts (-0.028). Qwen3.5: helps (+0.037) |
 | `entropy_veto_threshold` | None | Optional, 0.75 recommended. Catches uncertain tokens. |
-| `aggregation` | "ts_vote" | 7 methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, ensemble |
+| `aggregation` | "ts_vote" | 9 methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble |
 | `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
 | `ssbd_beta` | None | SSBD bias for LA backend. None=disabled, 0.0=pure speculative, 0.2=recommended |
 | `la_forced_decode` | False | Force-decode committed prefix in LA backend (CUNI approach) |
 | `adaptive_ssbd` | False | Entropy-based per-token SSBD beta modulation |
+| `la_two_pass` | False | Run two re-translations, keep more stable output. 2x compute, lower NE. |
+| `adaptive_aggregation` | False | AMS: per-token aggregation selection based on attention patterns |
+| `head_temp_normalize` | False | Normalize attention sharpness per head before aggregation |
+| `head_temp_reference` | 1.5 | Reference entropy (nats) for temperature normalization |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 

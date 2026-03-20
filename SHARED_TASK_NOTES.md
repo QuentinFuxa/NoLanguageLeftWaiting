@@ -1,38 +1,51 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## What exists now (after Iteration 5, 2026-03-20)
+## What exists now (after Iteration 6, 2026-03-20)
 
-**21 SimulMT modules (~8300 lines), 244 tests passing:**
+**22 SimulMT modules (~9200 lines), 290 tests passing:**
 
-### Core (Iterations 1-4):
+### Core (Iterations 1-5):
 - `nllw/prompts.py` -- 30+ prompt formats (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, Gemma)
 - `nllw/llama_backend.py` -- ctypes wrapper for llama.cpp (attention extraction + KV cache)
 - `nllw/backend_protocol.py` -- SimulMTBackend ABC + factory + `@register_backend`
-- `nllw/alignatt.py` -- Core algorithm (TS-weighted vote, border detection, entropy, lookahead) + **9 aggregation methods**
+- `nllw/alignatt.py` -- Core algorithm + **9 aggregation methods** + AMS + temp normalization
 - `nllw/alignatt_backend.py` -- Full backend with KV cache reuse + baselines (full-sentence, eager)
-- `nllw/alignatt_la_backend.py` -- LocalAgreement + AlignAtt + SSBD + forced decoding + adaptive SSBD
-- `nllw/metrics.py` -- All latency metrics (AL, LAAL, YAAL, AP, DAL, MaxCW) + BLEU/COMET + NE metric
-- `nllw/bench.py` -- Unified CLI with sweep, compare, forced-decode, adaptive-ssbd flags
+- `nllw/alignatt_la_backend.py` -- LA + AlignAtt + SSBD + forced decode + adaptive SSBD + two-pass
+- `nllw/metrics.py` -- All latency metrics + BLEU/COMET + NE metric
+- `nllw/bench.py` -- Unified CLI with 12+ sweep shortnames
 - `nllw/baselines.py` -- wait-k + fixed-rate baselines
 - `nllw/heads/configs/` -- 22 pre-computed alignment head configs
 - Plus: `eval.py`, `simulate.py`, `corpus.py`, `experiment.py`, `analysis.py`, `research.py`, `detect_heads.py`, `omnisteval.py`
 - `web_debug/server.py` -- FastAPI debug server on port 8777
 
-### New in Iteration 5:
-- **Gaussian Kernel Consensus** (2 variants in `alignatt.py`):
-  - `gaussian_kernel`: TS-weighted Gaussian density over head argmaxes. Sigma param.
-  - `gaussian_kernel_continuous`: Full attention distribution convolution.
-  - Key advantage: subword boundary tolerance. Nearby heads reinforce instead of competing.
-- **LA Forced Decoding** (`_retranslate_forced()` in LA backend):
-  - Force-decode committed prefix before generating continuation
-  - Conditions model on stable output (consistency) + fewer tokens to generate (speed)
-  - `--forced-decode` CLI flag, `forced=0,1` sweep shortname
-  - Priority: SSBD > forced_decode > standard
-- **Adaptive SSBD Beta** (`adaptive_ssbd_beta()` in LA backend):
-  - Per-token entropy-based bias: confident=beta*1.5, uncertain=beta*0.2
-  - `--adaptive-ssbd` CLI flag, `adaptive=0,1` sweep shortname
-  - Capped at 0.95 to avoid degenerate acceptance
-- 41 new tests (244 total, all passing)
+### New in Iteration 6:
+- **LA Two-Pass Catch-up** (`_retranslate_two_pass()` in LA backend):
+  - Run two re-translations per source update, keep the more stable one
+  - Pass 2 always uses standard re-translation for diversity
+  - `--two-pass` CLI flag, `twopass=0,1` sweep shortname
+  - Trades 2x compute for lower NE (output flicker)
+- **Adaptive Multi-Strategy (AMS)** (`select_adaptive_aggregation()` in alignatt.py):
+  - Per-token aggregation method selection based on attention patterns
+  - head agreement >= 0.7 + entropy <= 1.0 -> ts_vote
+  - head agreement >= 0.7 + entropy > 1.0 -> entropy_weighted
+  - head agreement < 0.7 + entropy <= 1.5 -> geomean
+  - head agreement < 0.7 + entropy > 1.5 -> consensus
+  - `--adaptive-agg` CLI flag, `ams=0,1` sweep shortname
+- **Per-head Temperature Normalization** (`normalize_head_temperatures()` in alignatt.py):
+  - Binary search temperature scaling to match reference entropy
+  - Ensures sharp heads don't dominate; fair comparison across heads
+  - `--head-temp-norm` CLI flag, `tempnorm=0,1 tempref=1.0,1.5,2.0` sweep
+- **Cross-lingual Head Transfer** (`nllw/head_transfer.py`):
+  - Full analysis utility: Jaccard, overlap, TS correlation, transferred TS mass
+  - **RESULTS** (run on real configs):
+    - EuroLLM: 98.9% mean TS mass, 97.3% min -- EXCELLENT
+    - HY-MT1.8B: 98.4% mean -- EXCELLENT
+    - Qwen3.5-4B: 97.8% mean, 92.7% min -- EXCELLENT
+    - Qwen3.5-9B: 99.7% mean -- EXCELLENT
+    - Qwen3-4B: 79.8% mean, 43.5% worst (en-it->en-zh) -- GOOD but pair-specific
+  - Confirms ICLR 2026 finding: most models have universal alignment heads
+  - `python -m nllw.head_transfer --all --top-k 10`
+- 46 new tests (290 total, all passing)
 
 ## What to do next
 
@@ -50,27 +63,28 @@ python -m nllw.bench --compare alignatt alignatt-la --lang en-zh --comet --save
 
 # 1d. SSBD speedup: fixed vs adaptive beta
 python -m nllw.bench --backend alignatt-la --sweep "ssbd=0.0,0.1,0.2,0.3" --lang en-zh --comet --save
-python -m nllw.bench --backend alignatt-la --ssbd-beta 0.2 --adaptive-ssbd --lang en-zh --comet --save
 
 # 1e. Forced decoding test
 python -m nllw.bench --backend alignatt-la --forced-decode --lang en-zh --comet --save
 
-# 1f. Dynamic border distance test
-python -m nllw.bench --lang en-zh --dynamic-border --comet --save
+# 1f. Iteration 6 features sweep
+python -m nllw.bench --sweep "ams=0,1 tempnorm=0,1" --lang en-zh --comet --save
+python -m nllw.bench --backend alignatt-la --two-pass --lang en-zh --comet --save
+python -m nllw.bench --adaptive-agg --head-temp-norm --lang en-zh --comet --save
 
 # 1g. Pareto sweep
 python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --save
 ```
 
 ### Priority 2: Further optimizations
-- **LA two-pass catch-up**: Extra re-translation per update for stability
-- **Adaptive Multi-Strategy (AMS)**: Auto-select aggregation based on attention patterns
-- **Per-head temperature normalization**: Learned during head detection
+- **Dynamic word_batch**: Adjust wb based on source complexity
+- **ExPosST position slots**: Pre-allocate KV positions for zero-recomputation
+- **SSD parallel speculation**: Multiple draft continuations for 2x speedup
 
 ### Priority 3: Research ideas (see todo.md)
-- ExPosST position slot reservation
-- Cross-lingual head transfer
-- Dynamic word_batch based on source complexity
+- GRPO fine-tuning (RL-optimize read/write)
+- Syntax-aware chunking (SASST)
+- Group Position Encoding as alternative KV cache
 
 ## Key architecture decisions
 
@@ -81,12 +95,11 @@ python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --
 - `detect_heads` uses SimAlign (mBERT) for ground-truth word alignments
 - `aggregate()` dispatcher routes to any of 9 aggregation strategies
 - LA backend retranslation priority: SSBD > forced_decode > standard
-- `_longest_common_prefix_tokens()` is the core LA stability check
-- SSBD uses `output_last_only=False` in `decode_batch_at` for per-position logits
-- SSBD acceptance uses log-ratio trick to avoid full softmax computation
-- Adaptive SSBD computes per-token entropy and scales beta proportionally
-- Forced decoding includes committed_ids in the batch decode, then generates continuation
-- Gaussian kernel uses TS-weighted Gaussian density; sigma controls argmax-to-mean interpolation
+- Two-pass uses pass 1 (SSBD/forced/standard) + pass 2 (always standard) for diversity
+- `_check_border()` helper centralizes all border check params (AMS, temp norm, dynamic)
+- `normalize_head_temperatures()` uses binary search over temperature parameter
+- `select_adaptive_aggregation()` uses head agreement ratio + attention entropy
+- Cross-lingual head transfer: most models have >90% TS mass transfer across pairs
 
 ## Important context
 
@@ -97,16 +110,19 @@ python -m nllw.bench --sweep "bd=2,3,4,5 wb=1,2,3" --lang en-zh,en-de --comet --
 - 5 directions available: en-fr, en-zh, en-de, en-it, cs-en
 - **7 backends registered**: alignatt, alignatt-la, full-sentence, eager, wait-k, fixed-rate
 - **9 aggregation methods**: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble
-- **SSBD**: `ssbd_beta=0.2` recommended, `adaptive_ssbd=True` for entropy-based modulation
-- **Forced decoding**: `la_forced_decode=True` for committed prefix conditioning
-- **NE metric**: `compute_normalized_erasure()` for token-level, `compute_normalized_erasure_text()` for word-level
+- **New params**: `la_two_pass`, `adaptive_aggregation`, `head_temp_normalize`, `head_temp_reference`
+- **New sweeps**: `twopass=0,1`, `ams=0,1`, `tempnorm=0,1`, `tempref=1.0,1.5,2.0`
+- **Head transfer**: EuroLLM/HY-MT/Qwen3.5 heads are cross-lingually universal. Qwen3-4B less so.
 - SOTA research documented in `docs/research/sota-simulmt-2026.md`
 
-## Key research findings (from SOTA survey)
+## Key research findings
 
-- **AlignAtt validated**: CUNI won IWSLT 2025 using AlignAtt. ICLR 2026 "Translation Heads" paper confirms alignment heads are sparse, universal, consistent.
-- **SSBD** (arxiv 2509.21740) implemented -- can accelerate re-translation (alignatt-la) via speculative draft reuse
-- **ExPosST** (arxiv 2603.14903) pre-allocates position slots for zero-recomputation KV cache
-- **Open gap**: No published work on alternative attention aggregation -- our 9 methods are novel
-- **Hikari** (arxiv 2603.11578) is the main competitor: policy-free WAIT tokens, SOTA on EN-JA/DE/RU
-- **IWSLT 2026 metrics**: LongYAAL (primary latency), XCOMET-XL (primary quality) -- our pipeline is aligned
+- **Cross-lingual head transfer confirmed**: 4/5 models tested show >90% TS mass transfer
+  - Implication: Can detect heads on one language pair, reuse for all others
+  - Exception: Qwen3-4B has weaker transfer (79.8% mean), may need per-pair heads
+- **AlignAtt validated**: CUNI won IWSLT 2025 using AlignAtt
+- **SSBD** implemented -- speculative re-translation speedup
+- **ExPosST** not yet implemented -- position slot reservation for KV cache
+- **Open gap**: No published work on attention aggregation selection (our AMS is novel)
+- **Hikari** is main competitor: policy-free WAIT tokens
+- **IWSLT 2026 metrics**: LongYAAL (primary latency), XCOMET-XL (primary quality)

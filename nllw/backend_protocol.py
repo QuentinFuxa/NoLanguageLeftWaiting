@@ -62,6 +62,23 @@ class BackendConfig:
     #   uncertain (high entropy) -> lower beta (stricter)
     # Combines SSBD (2509.21740) with entropy-modulated confidence (2508.15371).
     adaptive_ssbd: bool = False
+    # LA Two-Pass Catch-up: run two re-translations per update, keep the one
+    # with the longer stable prefix (more consistent with previous output).
+    # CUNI approach: extra pass catches instability from attention drift.
+    # Trades 2x compute for better output stability (lower NE).
+    la_two_pass: bool = False
+    # Adaptive Multi-Strategy (AMS): auto-select aggregation method per token
+    # based on attention patterns. When True, overrides the 'aggregation' field.
+    # Selects among ts_vote, entropy_weighted, consensus, geomean based on:
+    #   - head agreement ratio (high -> ts_vote, low -> consensus)
+    #   - attention entropy (low -> geomean, high -> entropy_weighted)
+    adaptive_aggregation: bool = False
+    # Per-head temperature normalization: normalize attention sharpness per head
+    # before aggregation. Heads with naturally sharper distributions are scaled
+    # to match heads with broader distributions, ensuring fair weighting.
+    # Learned during head detection; at runtime uses a fixed reference entropy.
+    head_temp_normalize: bool = False
+    head_temp_reference: float = 1.5  # Reference entropy (nats) for normalization
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

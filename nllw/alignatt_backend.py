@@ -276,12 +276,18 @@ class AlignAttBackend(SimulMTBackend):
                                 src_attn, self._ts_scores,
                                 num_src_tokens, self.config.border_distance,
                                 aggregation=self.config.aggregation,
+                                adaptive_aggregation=self.config.adaptive_aggregation,
+                                head_temp_normalize=self.config.head_temp_normalize,
+                                head_temp_reference=self.config.head_temp_reference,
                             )
                         else:
                             border_hit = check_border(
                                 src_attn, self._ts_scores,
                                 num_src_tokens, self.config.border_distance,
                                 aggregation=self.config.aggregation,
+                                adaptive_aggregation=self.config.adaptive_aggregation,
+                                head_temp_normalize=self.config.head_temp_normalize,
+                                head_temp_reference=self.config.head_temp_reference,
                             )
                         if border_hit:
                             stopped_at_border = True
