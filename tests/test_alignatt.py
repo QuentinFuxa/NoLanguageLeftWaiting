@@ -378,3 +378,90 @@ class TestCumulativeAttention:
         attn = np.zeros((1, 0))
         pos = aggregate_cumulative_attention(attn, [1.0])
         assert pos == 0
+
+
+# ---------------------------------------------------------------------------
+# Perplexity-based adaptive border tests (Hibiki-inspired)
+# ---------------------------------------------------------------------------
+
+class TestTokenPerplexity:
+    """Test compute_token_perplexity()."""
+
+    def test_confident_token(self):
+        """High probability token -> low perplexity."""
+        from nllw.alignatt import compute_token_perplexity
+        # Logits that produce P(token_0) ~ 0.95
+        logits = np.array([5.0, 0.0, 0.0, 0.0])
+        ppl = compute_token_perplexity(logits, 0)
+        assert ppl < 2.0  # Very confident
+
+    def test_uncertain_token(self):
+        """Low probability token -> high perplexity."""
+        from nllw.alignatt import compute_token_perplexity
+        # Uniform logits
+        logits = np.array([1.0, 1.0, 1.0, 1.0])
+        ppl = compute_token_perplexity(logits, 0)
+        assert ppl > 3.0  # 4-way uniform = ppl 4
+
+    def test_perplexity_minimum(self):
+        """Perplexity is always >= 1.0 for the argmax token."""
+        from nllw.alignatt import compute_token_perplexity
+        logits = np.array([100.0, 0.0])
+        ppl = compute_token_perplexity(logits, 0)
+        assert ppl >= 1.0
+
+
+class TestGenerationPerplexity:
+    """Test compute_generation_perplexity()."""
+
+    def test_single_token(self):
+        from nllw.alignatt import compute_generation_perplexity
+        ppl = compute_generation_perplexity([2.5])
+        assert ppl == pytest.approx(2.5, abs=0.01)
+
+    def test_multiple_tokens(self):
+        from nllw.alignatt import compute_generation_perplexity
+        # Geometric mean of [2, 8] = sqrt(16) = 4
+        ppl = compute_generation_perplexity([2.0, 8.0])
+        assert ppl == pytest.approx(4.0, abs=0.01)
+
+    def test_empty(self):
+        from nllw.alignatt import compute_generation_perplexity
+        assert compute_generation_perplexity([]) == 1.0
+
+
+class TestPerplexityBorderAdjustment:
+    """Test perplexity_border_adjustment()."""
+
+    def test_confident_tightens(self):
+        """Low perplexity -> tighten border (bd-1)."""
+        from nllw.alignatt import perplexity_border_adjustment
+        bd = perplexity_border_adjustment(1.5, base_bd=3, low_threshold=2.0)
+        assert bd == 2  # 3 - 1
+
+    def test_uncertain_widens(self):
+        """High perplexity -> widen border (bd+1)."""
+        from nllw.alignatt import perplexity_border_adjustment
+        bd = perplexity_border_adjustment(6.0, base_bd=3, high_threshold=5.0)
+        assert bd == 4  # 3 + 1
+
+    def test_normal_no_change(self):
+        """Middle perplexity -> no change."""
+        from nllw.alignatt import perplexity_border_adjustment
+        bd = perplexity_border_adjustment(3.5, base_bd=3, low_threshold=2.0, high_threshold=5.0)
+        assert bd == 3
+
+    def test_minimum_bd_1(self):
+        """Border distance never goes below 1."""
+        from nllw.alignatt import perplexity_border_adjustment
+        bd = perplexity_border_adjustment(0.5, base_bd=1, low_threshold=2.0)
+        assert bd == 1  # Can't go below 1
+
+    def test_config_field_exists(self):
+        """BackendConfig has perplexity_adaptive_bd field."""
+        from nllw.backend_protocol import BackendConfig
+        config = BackendConfig()
+        assert hasattr(config, 'perplexity_adaptive_bd')
+        assert config.perplexity_adaptive_bd is False
+        assert config.perplexity_bd_low == 2.0
+        assert config.perplexity_bd_high == 5.0

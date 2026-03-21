@@ -956,6 +956,86 @@ def compute_entropy(logits: np.ndarray) -> float:
     return float(-np.sum(probs * log_probs))
 
 
+def compute_token_perplexity(logits: np.ndarray, token_id: int) -> float:
+    """Compute perplexity for a specific generated token.
+
+    Perplexity = exp(-log P(token)). Low perplexity means the model was
+    confident about this token. High perplexity means uncertainty.
+
+    Used by perplexity-based adaptive border (Hibiki-inspired):
+    track running perplexity during generation to decide whether to
+    widen or tighten the border distance for the next translate() call.
+
+    Args:
+        logits: Raw logits array (n_vocab,)
+        token_id: The token that was actually generated
+
+    Returns:
+        Token-level perplexity (>= 1.0)
+    """
+    # Stable softmax
+    logits = logits - np.max(logits)
+    exp_logits = np.exp(logits)
+    probs = exp_logits / exp_logits.sum()
+    # P(token) -> perplexity
+    p = float(probs[token_id]) if token_id < len(probs) else 1e-10
+    p = max(p, 1e-10)  # Guard against zero
+    return float(np.exp(-np.log(p)))
+
+
+def compute_generation_perplexity(
+    token_perplexities: List[float],
+) -> float:
+    """Compute average perplexity over a sequence of generated tokens.
+
+    Used to determine generation confidence for the entire word batch.
+    Geometric mean of per-token perplexities (= exp of mean log-probs).
+
+    Args:
+        token_perplexities: Per-token perplexity values from compute_token_perplexity
+
+    Returns:
+        Average (geometric mean) perplexity. 1.0 = perfect confidence.
+    """
+    if not token_perplexities:
+        return 1.0
+    # Geometric mean via log domain
+    log_ppls = [np.log(max(p, 1.0)) for p in token_perplexities]
+    return float(np.exp(sum(log_ppls) / len(log_ppls)))
+
+
+def perplexity_border_adjustment(
+    avg_perplexity: float,
+    base_bd: int,
+    low_threshold: float = 2.0,
+    high_threshold: float = 5.0,
+) -> int:
+    """Compute border distance adjustment from generation perplexity.
+
+    Maps generation confidence to a border distance delta:
+    - Very confident (ppl < low) -> bd - 1 (lower latency)
+    - Confident (low <= ppl <= high) -> bd (no change)
+    - Uncertain (ppl > high) -> bd + 1 (better quality)
+
+    Hibiki-inspired: unlike entropy veto (which stops generation, a dead end),
+    this adjusts the READ/WRITE policy between steps, targeting YAAL latency.
+
+    Args:
+        avg_perplexity: Average generation perplexity from compute_generation_perplexity()
+        base_bd: Base border_distance from config
+        low_threshold: Below this = confident -> tighten border
+        high_threshold: Above this = uncertain -> widen border
+
+    Returns:
+        Adjusted border_distance (clamped to >= 1)
+    """
+    if avg_perplexity < low_threshold:
+        return max(1, base_bd - 1)
+    elif avg_perplexity > high_threshold:
+        return base_bd + 1
+    return base_bd
+
+
 def source_lookahead_top_prob(logits: np.ndarray) -> Tuple[float, int]:
     """Compute top-token probability from raw logits.
 
