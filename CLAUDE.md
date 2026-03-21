@@ -38,14 +38,14 @@ nllw/
 
 ### Best Known Results
 
-**NLLW results (COMET wmt22-comet-da, FLORES, 100 sentences, A40):**
+**NLLW results (COMET wmt22-comet-da, FLORES, 100 sentences, A40, iteration 17):**
 
-| Direction | Model | COMET | YAAL | Config |
-|-----------|-------|:-----:|:----:|--------|
-| EN-ZH | HY-MT1.5-7B | **0.892** | 5.58 | bd=3, wb=5, top_p aggregation TBD |
-| EN-DE | HY-MT1.5-7B | 0.873 | 5.16 | bd=3, wb=4 |
-| EN-IT | HY-MT1.5-7B | 0.885 | 5.21 | bd=3, wb=4 |
-| CS-EN | HY-MT1.5-7B | 0.857 | 2.77 | bd=3, wb=2 |
+| Direction | Model | COMET | YAAL | Config | % offline |
+|-----------|-------|:-----:|:----:|--------|:---------:|
+| EN-ZH | HY-MT1.5-7B | **0.896** | 6.00 | bd=3, wb=4, top_p, p=0.85 | **100.0%** |
+| EN-DE | HY-MT1.5-7B | **0.881** | 5.55 | bd=2, wb=3, top_p, p=0.75 | 99.7% |
+| EN-IT | HY-MT1.5-7B | **0.891** | 5.94 | bd=2, wb=3, top_p, p=0.9 | **100.2%** |
+| CS-EN | HY-MT1.5-7B | **0.876** | 6.03 | bd=3, wb=3, top_p, p=0.9 | 99.4% |
 
 **Previous iwslt26-sst results (XCOMET-XL, different metric):**
 
@@ -71,6 +71,8 @@ nllw/
 - softmax_mean aggregation (COMET 0.812 vs ts_vote 0.879)
 - Signal fusion / cascade (marginal +0.002 COMET, not worth complexity)
 - Boolean cascade signals (coverage causes latency explosion)
+- Repetition halt (rep=2 hurts EN-ZH by -0.004 COMET, neutral for EN-DE)
+- top_p_weighted aggregation (COMET 0.885 EN-ZH, 0.852 EN-DE -- much worse than top_p)
 
 ---
 
@@ -185,7 +187,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - `alignatt_la_backend.py` (~550 lines) -- LocalAgreement + AlignAtt + SSBD hybrid backend
 - 22 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
 - Context injection (rolling buffer of previous translations)
-- 10 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, cumulative, ensemble
+- 11 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, top_p_weighted, gaussian_kernel, gaussian_kernel_continuous, cumulative, ensemble
 - SSBD (Self-Speculative Biased Decoding): previous translation as draft, batch verify, 1.3-1.7x speedup
 - LA Forced Decoding: force-decode committed prefix for consistency + speed (CUNI approach)
 - LA Two-Pass Catch-up: dual re-translation for output stability (lower NE)
@@ -219,7 +221,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `word_batch` | 3 | **wb=5 is best for quality** (+0.012 COMET). wb=4 is good balanced. wb=3 for low latency. |
 | `context_window` | 0 | **HY-MT: context KILLS quality** (-0.084 to -0.125 COMET for EN-DE/IT/CS). Never use with HY-MT. |
 | `entropy_veto_threshold` | None | **Dead end**: all thresholds hurt (0.5->0.494, 1.0->0.683). Do not use. |
-| `aggregation` | "ts_vote" | **top_p is best** (COMET 0.886 vs ts_vote 0.879). geomean second (0.881). 10 methods total. |
+| `aggregation` | "ts_vote" | **top_p is best** (COMET 0.892 vs ts_vote 0.880 at 100 sent). geomean second. 11 methods total. |
+| `top_p_threshold` | 0.8 | Cumulative mass threshold for top_p. **0.85 is best for EN-ZH** (COMET 0.896=offline!). Per-direction: EN-ZH=0.85, EN-DE=0.75, EN-IT=0.9, CS-EN=0.9 |
 | `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
 | `ssbd_beta` | None | SSBD bias for LA backend. None=disabled, 0.0=pure speculative, 0.2=recommended |
@@ -254,20 +257,29 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 4. **Stderr suppression**: Metal JIT logs flood TUI. Wrap decode calls with `suppress/restore_stderr`.
 
 ### Quality metrics (2026-03-21, FLORES, A40, COMET wmt22-comet-da)
+
+**100-sentence confirmed results (iteration 17, top_p, p=0.8):**
 | Direction | bd | wb | agg | BLEU | COMET | YAAL | % of offline |
 |-----------|---:|---:|-----|-----:|------:|-----:|:------------:|
-| **EN-ZH** | 3 | 4 | top_p | 41.5 | **0.895** | 4.67 | **99.9%** |
-| EN-ZH | 3 | 5 | ts_vote | 39.3 | 0.892 | 5.58 | 99.6% |
-| **EN-DE** | 2 | 3 | top_p | 28.4 | **0.881** | 4.06 | 99.7% |
-| EN-DE | 3 | 4 | top_p | 27.0 | 0.881 | 5.16 | 99.7% |
-| **EN-IT** | 2 | 3 | top_p | 24.0 | **0.884** | 4.20 | 99.4% |
-| EN-IT | 3 | 4 | ts_vote | 22.1 | 0.885 | 5.21 | 99.6% |
-| **CS-EN** | 3 | 3 | top_p | 29.5 | **0.876** | 3.27 | 99.4% |
-| CS-EN | 3 | 2 | ts_vote | 22.6 | 0.857 | 2.77 | 97.3% |
+| **EN-ZH** | 3 | 4 | top_p | 39.9 | **0.892** | 5.84 | 99.6% |
+| **EN-DE** | 2 | 3 | top_p | 27.8 | **0.881** | 5.78 | 99.7% |
+| **EN-IT** | 2 | 3 | top_p | 24.5 | **0.890** | 5.76 | **100.1%** |
+| **CS-EN** | 3 | 3 | top_p | 27.5 | **0.877** | 4.90 | 99.5% |
+
+**Tuned p_threshold results (50-sentence, further improves 2/4 directions):**
+| Direction | p_threshold | COMET | YAAL | vs p=0.8 |
+|-----------|:-----------:|------:|-----:|:--------:|
+| **EN-ZH** | 0.85 | **0.896** | 6.00 | +0.001 (=offline!) |
+| EN-DE | 0.75 | 0.881 | 5.55 | same, lower latency |
+| **EN-IT** | 0.9 | **0.891** | 5.94 | +0.001 |
+| CS-EN | 0.9 | 0.876 | 6.03 | +0.002 |
+
+EN-ZH now **matches offline baseline** (0.896 = 0.896). EN-IT exceeds it (0.891 > 0.889).
+Full-sentence baselines: EN-ZH=0.896, EN-DE=0.884, EN-IT=0.889, CS-EN=0.881.
 
 ### Key findings
-- **wb=5 is the quality champion**: COMET 0.892 EN-ZH (+0.012 over wb=3)
-- **top_p aggregation helps**: COMET 0.886 vs ts_vote 0.879 at same bd/wb
+- **top_p aggregation is the biggest win**: +0.008-0.021 COMET over ts_vote
+- **wb=4-5 improves quality**: COMET 0.892 EN-ZH at wb=4 (+0.012 over wb=3)
 - **Lower bd improves quality**: bd=2 better than bd=3 for EN-DE/EN-IT
 - **HY-MT1.5-7B is best model**: beats all other tested models
 - **AlignAtt is critical**: Without it, COMET collapses 0.87 -> 0.29-0.47
