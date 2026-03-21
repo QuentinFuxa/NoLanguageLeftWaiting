@@ -321,6 +321,15 @@ class AlignAttLABackend(SimulMTBackend):
                     base_gen_cap=self.config.max_new_per_step,
                 )
 
+            # Adaptive top_p threshold
+            self._effective_top_p = self.config.top_p_threshold
+            if self.config.adaptive_top_p and len(self._source_words) >= 2:
+                from .complexity import adaptive_top_p_threshold
+                self._effective_top_p = adaptive_top_p_threshold(
+                    accumulated,
+                    base_threshold=self.config.top_p_threshold,
+                )
+
             # Dynamic word batching (applied on top of complexity)
             if self.config.dynamic_word_batch:
                 effective_wb = compute_dynamic_word_batch(
@@ -465,7 +474,7 @@ class AlignAttLABackend(SimulMTBackend):
                 positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
                 monotonicity_enabled=self.config.attention_monotonicity,
                 attn_shift_write=getattr(self, '_current_attn_shift_write', None) if self.config.attention_shift else None,
-                top_p_threshold=self.config.top_p_threshold,
+                top_p_threshold=getattr(self, '_effective_top_p', self.config.top_p_threshold),
             )
             self._prev_step_attn = src_attn.copy()
             return hit
@@ -478,7 +487,7 @@ class AlignAttLABackend(SimulMTBackend):
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
                 head_temp_reference=self.config.head_temp_reference,
-                top_p_threshold=self.config.top_p_threshold,
+                top_p_threshold=getattr(self, '_effective_top_p', self.config.top_p_threshold),
             )
         else:
             return check_border(
@@ -488,7 +497,7 @@ class AlignAttLABackend(SimulMTBackend):
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
                 head_temp_reference=self.config.head_temp_reference,
-                top_p_threshold=self.config.top_p_threshold,
+                top_p_threshold=getattr(self, '_effective_top_p', self.config.top_p_threshold),
             )
 
     def _lsg_probe(self, last_token: int, pos: int,

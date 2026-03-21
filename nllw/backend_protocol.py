@@ -48,6 +48,14 @@ class BackendConfig:
     # Lower = tighter (closer to argmax), higher = broader (further right frontier).
     # Default 0.8. Range: 0.5-0.95.
     top_p_threshold: float = 0.8
+    # Adaptive top_p threshold: dynamically adjust p_threshold per-sentence
+    # based on source text complexity. Simple sentences use lower threshold
+    # (faster latency, still good quality), complex sentences use higher
+    # (more conservative, safer). Range mapped from complexity score:
+    # simple -> base - 0.1, complex -> base + 0.1, capped at [0.5, 0.95].
+    # Novel: no published work on adaptive aggregation thresholds for SimulMT.
+    # False=disabled, True=enabled (adjusts around top_p_threshold as baseline).
+    adaptive_top_p: bool = False
     # Dynamic border distance (adjusts per-token based on attention entropy)
     dynamic_border: bool = False
     # SSBD (Self-Speculative Biased Decoding) for LA backend

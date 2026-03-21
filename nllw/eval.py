@@ -21,6 +21,7 @@ from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple, Any
 
 from .metrics import (
+    bootstrap_confidence_interval,
     compute_all_metrics,
     compute_bleu_corpus,
     compute_comet,
@@ -132,6 +133,8 @@ class EvalResult:
     # Timing
     total_time_s: float = 0.0
     avg_time_per_sentence_ms: float = 0.0
+    # Confidence intervals (bootstrap, 95%)
+    comet_ci: Optional[Tuple[float, float]] = None  # (lower, upper)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -145,6 +148,8 @@ class EvalResult:
             f"=== {self.backend_type} | {self.direction} | {self.n_sentences} sentences ===",
             f"  Quality: BLEU={self.bleu:.1f}" + (f" COMET={self.comet:.3f}" if self.comet else ""),
         ]
+        if self.comet_ci:
+            lines[-1] += f" [{self.comet_ci[0]:.3f}, {self.comet_ci[1]:.3f}]"
         if self.xcomet:
             lines[-1] += f" XCOMET={self.xcomet:.3f}"
         lines.extend([
@@ -279,21 +284,24 @@ def evaluate_backend(
     # Compute COMET
     if compute_comet_score:
         try:
-            score, _ = compute_comet(sources, hypotheses, references, batch_size=comet_batch_size)
+            score, per_scores = compute_comet(sources, hypotheses, references, batch_size=comet_batch_size)
             result.comet = score
+            # Bootstrap 95% confidence interval
+            if per_scores and len(per_scores) >= 10:
+                _, ci_lo, ci_hi = bootstrap_confidence_interval(per_scores)
+                result.comet_ci = (ci_lo, ci_hi)
         except Exception as e:
             print(f"  COMET computation failed: {e}", file=sys.stderr)
 
-    # Compute XCOMET-XL
-    # NOTE: XCOMET-XL (~12GB VRAM) may OOM if the translation model is still loaded.
-    # Close the backend to free GPU VRAM before loading the XCOMET-XL model.
-    # We also force garbage collection and CUDA cache clearing to ensure VRAM is freed.
+    # Compute XCOMET-XL via separate process (avoids OOM).
+    # XCOMET-XL (~12GB VRAM) OOMs when the translation model is still loaded.
+    # Must close the backend to free GPU VRAM before launching subprocess.
     if compute_xcomet_score:
+        if verbose:
+            print("  Scoring XCOMET-XL via subprocess (avoids OOM)...", file=sys.stderr)
+        # Close backend to free GPU VRAM -- XCOMET-XL needs it
         if hasattr(backend, 'close'):
-            if verbose:
-                print("  Closing backend to free VRAM for XCOMET-XL...", file=sys.stderr)
             backend.close()
-        # Force garbage collection to release any remaining GPU references
         import gc
         gc.collect()
         try:
@@ -303,15 +311,31 @@ def evaluate_backend(
                 torch.cuda.synchronize()
         except ImportError:
             pass
-        import time as _time
-        _time.sleep(2)  # Allow CUDA driver to reclaim memory
         try:
-            score, _ = compute_comet(
-                sources, hypotheses, references,
-                model_name="Unbabel/XCOMET-XL",
-                batch_size=comet_batch_size,
+            import tempfile
+            from .xcomet_scorer import save_hypotheses_json, score_xcomet_subprocess
+
+            # Save hypotheses to temp file
+            fd, tmp_path = tempfile.mkstemp(suffix=".json", prefix="nllw_eval_")
+            os.close(fd)
+            save_hypotheses_json(result, tmp_path)
+
+            # Score in subprocess (GPU now free from translation model)
+            scores = score_xcomet_subprocess(
+                tmp_path,
+                batch_size=min(comet_batch_size, 2),  # cap at 2 for A40 safety
+                timeout=600,
             )
-            result.xcomet = score
+            if scores and "system_score" in scores:
+                result.xcomet = scores["system_score"]
+                if verbose:
+                    print(f"  XCOMET-XL: {result.xcomet:.4f}", file=sys.stderr)
+            else:
+                print("  XCOMET-XL subprocess returned no scores", file=sys.stderr)
+
+            # Cleanup
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
         except Exception as e:
             print(f"  XCOMET-XL computation failed: {e}", file=sys.stderr)
 
