@@ -279,6 +279,64 @@ def aggregate_top_p(
     return max(top_positions)
 
 
+def aggregate_top_p_weighted(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+    p_threshold: float = 0.8,
+) -> float:
+    """Top-p weighted frontier: attention-weighted mean of top-p positions.
+
+    Like top_p but returns a continuous position (weighted mean of top-p set
+    positions by their attention mass) instead of just the rightmost.
+
+    This captures the center-of-mass of where the model is attending within
+    the top-p set. More robust than max (less sensitive to outlier positions)
+    while still being more conservative than argmax (includes the frontier).
+
+    The returned value is continuous and can be compared to border_threshold.
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+        p_threshold: Cumulative probability threshold (default: 0.8)
+
+    Returns:
+        Attention-weighted mean position within top-p set (continuous)
+    """
+    n_heads, n_src = src_attn.shape
+
+    # TS-weighted average distribution
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < 1e-10:
+        merged = src_attn.mean(axis=0)
+    else:
+        merged = (ts[:, np.newaxis] * src_attn).sum(axis=0) / ts_sum
+
+    # Normalize
+    total = merged.sum()
+    if total < 1e-10:
+        return 0.0
+    merged = merged / total
+
+    # Sort by attention weight descending, accumulate
+    sorted_indices = np.argsort(-merged)
+    cumsum = 0.0
+    top_positions = []
+    top_weights = []
+    for idx in sorted_indices:
+        cumsum += merged[idx]
+        top_positions.append(int(idx))
+        top_weights.append(merged[idx])
+        if cumsum >= p_threshold:
+            break
+
+    # Return weighted mean position
+    positions = np.array(top_positions, dtype=np.float64)
+    weights = np.array(top_weights, dtype=np.float64)
+    return float(np.average(positions, weights=weights))
+
+
 # ---------------------------------------------------------------------------
 # Aggregation registry
 # ---------------------------------------------------------------------------
@@ -642,6 +700,7 @@ _BASE_AGGREGATION_METHODS = {
     "consensus": aggregate_consensus,
     "geomean": aggregate_geomean,
     "top_p": aggregate_top_p,
+    "top_p_weighted": aggregate_top_p_weighted,
     "gaussian_kernel": aggregate_gaussian_kernel,
     "gaussian_kernel_continuous": aggregate_gaussian_kernel_continuous,
     "cumulative": aggregate_cumulative_attention,
@@ -662,6 +721,7 @@ def aggregate(
     src_attn: np.ndarray,
     ts_scores: List[float],
     method: str = "ts_vote",
+    **kwargs,
 ) -> float:
     """Unified aggregation dispatcher.
 
@@ -669,6 +729,8 @@ def aggregate(
         src_attn: (n_heads, n_src) attention weights
         ts_scores: TS score per head
         method: Aggregation method name
+        **kwargs: Extra arguments forwarded to the aggregation function
+            (e.g., p_threshold for top_p)
 
     Returns:
         Attended source position (float for softmax_mean, int for others)
@@ -678,7 +740,12 @@ def aggregate(
             f"Unknown aggregation '{method}'. "
             f"Available: {list_aggregation_methods()}"
         )
-    return _AGGREGATION_METHODS[method](src_attn, ts_scores)
+    fn = _AGGREGATION_METHODS[method]
+    # Forward kwargs that the function accepts (e.g., p_threshold for top_p)
+    import inspect
+    sig = inspect.signature(fn)
+    valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+    return fn(src_attn, ts_scores, **valid_kwargs)
 
 
 def check_border(
@@ -690,6 +757,7 @@ def check_border(
     adaptive_aggregation: bool = False,
     head_temp_normalize: bool = False,
     head_temp_reference: float = 1.5,
+    top_p_threshold: float = 0.8,
 ) -> bool:
     """Check if the attention has reached the border region.
 
@@ -707,6 +775,7 @@ def check_border(
         adaptive_aggregation: If True, auto-select aggregation per token (AMS)
         head_temp_normalize: If True, normalize head temperatures before aggregation
         head_temp_reference: Reference entropy for temperature normalization
+        top_p_threshold: Cumulative threshold for top_p aggregation (0.0-1.0)
 
     Returns:
         True if border hit (should stop generating)
@@ -723,7 +792,8 @@ def check_border(
     if adaptive_aggregation:
         method = select_adaptive_aggregation(attn, ts_scores)
 
-    attended_pos = aggregate(attn, ts_scores, method=method)
+    attended_pos = aggregate(attn, ts_scores, method=method,
+                             p_threshold=top_p_threshold)
     return attended_pos >= border_threshold
 
 
@@ -818,6 +888,7 @@ def check_border_dynamic(
     adaptive_aggregation: bool = False,
     head_temp_normalize: bool = False,
     head_temp_reference: float = 1.5,
+    top_p_threshold: float = 0.8,
 ) -> bool:
     """Check border with dynamic border distance based on attention entropy.
 
@@ -859,7 +930,8 @@ def check_border_dynamic(
     if adaptive_aggregation:
         method = select_adaptive_aggregation(attn, ts_scores)
 
-    attended_pos = aggregate(attn, ts_scores, method=method)
+    attended_pos = aggregate(attn, ts_scores, method=method,
+                             p_threshold=top_p_threshold)
     return attended_pos >= border_threshold
 
 
@@ -1269,6 +1341,7 @@ def check_border_combined(
     positions_history: Optional[List[float]] = None,
     monotonicity_enabled: bool = False,
     attn_shift_write: Optional[bool] = None,
+    top_p_threshold: float = 0.8,
 ) -> Tuple[bool, Optional[float], Optional[float]]:
     """Combined border check with all available signals.
 
@@ -1395,7 +1468,8 @@ def check_border_combined(
     if border_threshold <= 0:
         return False, info_gain_val, border_mass_val
 
-    attended_pos = aggregate(attn, ts_scores, method=method)
+    attended_pos = aggregate(attn, ts_scores, method=method,
+                             p_threshold=top_p_threshold)
     standard_hit = attended_pos >= border_threshold
 
     if standard_hit and info_gain_val is not None:

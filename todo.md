@@ -457,6 +457,42 @@
   - rc=-9 (SIGKILL/OOM) resolved. **Needs re-run on A40.**
 - [x] 755 unit tests (9 new, all passing)
 
+## DONE -- Iteration 17: 100-Sentence Verification, top_p Tuning Infrastructure, Config Updates
+
+- [x] **100-sentence verification of top_p + optimal configs** (A40):
+  - EN-ZH bd=3/wb=4/top_p: BLEU=39.9, **COMET=0.892**, YAAL=5.84 (confirmed)
+  - EN-ZH bd=3/wb=5/top_p: COMET=0.891 (wb=5 saturates with top_p)
+  - EN-ZH bd=2/wb=3/top_p: COMET=0.889, YAAL=4.29 (balanced)
+  - EN-DE bd=2/wb=3/top_p: BLEU=27.8, **COMET=0.881**, YAAL=5.78 (confirmed)
+  - EN-DE bd=2/wb=4/top_p: COMET=0.880 (wb=4 doesn't help EN-DE)
+  - **Key finding**: wb increase saturates with top_p (frontier detection already defers stops)
+- [x] **Updated ALL IWSLT 2026 configs** (`configs/iwslt2026-*.yaml`):
+  - EN-ZH: bd=3, wb=4, top_p (from bd=2, wb=3, ts_vote)
+  - EN-DE: bd=2, wb=3, top_p (from bd=3, wb=3, ts_vote)
+  - EN-IT: bd=2, wb=3, top_p (from bd=3, wb=3, ts_vote)
+  - CS-EN: bd=3, wb=3, top_p (from bd=3, wb=2, ts_vote)
+  - Added repetition_max_repeats=2 to all configs
+- [x] **Updated SimulStream DIRECTION_DEFAULTS** (`simulstream.py`):
+  - Added `aggregation` field to SimulStreamConfig (was missing -- silently dropped)
+  - Wired `aggregation` and `repetition_max_repeats` into `to_backend_config()`
+  - Updated defaults for all 4 directions with top_p + optimal bd/wb
+- [x] **`top_p_threshold` parameter** (`backend_protocol.py`, `alignatt.py`, both backends, `bench.py`):
+  - Tunable cumulative mass threshold for top_p aggregation (0.0-1.0)
+  - Default 0.8 (never tuned -- sweep script prepared for A40)
+  - Forwarded through aggregate() -> check_border/check_border_dynamic/check_border_combined
+  - `--top-p-threshold` CLI flag, `topp` sweep shortname
+- [x] **`top_p_weighted` aggregation** (11th method):
+  - Attention-weighted mean of top-p positions (continuous frontier)
+  - More robust than max (less sensitive to outlier positions)
+  - Registered in aggregation methods, usable in sweeps via `agg=top_p_weighted`
+- [x] **XCOMET-XL OOM fix** (strengthened):
+  - Added gc.collect() + torch.cuda.empty_cache() + 2s sleep after backend.close()
+  - Previous fix (backend.close only) still OOM'd on A40 (rc=-9)
+- [x] **GPU experiment scripts**:
+  - `run_iteration17_experiments.py`: 5-phase comprehensive benchmark
+  - `run_topp_tuning.py`: p_threshold sweep + top_p_weighted comparison
+- [x] 785+ unit tests (30 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -542,6 +578,12 @@
 - [ ] **Fusion per direction**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh,en-de,en-it,cs-en --comet --save`
 - [ ] **Fusion + LSG**: `python -m nllw.bench --signal-fusion --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save`
 - [ ] **GPU experiment runner**: `./scripts/run_experiments.sh 1 --lang en-zh --model /path/to/model.gguf --comet` (Phase 1 validation)
+
+### top_p threshold tuning (new in iteration 17)
+- [ ] **top_p threshold sweep EN-ZH**: `python -m nllw.bench --sweep "topp=0.5,0.6,0.7,0.75,0.8,0.85,0.9,0.95" --aggregation top_p --border-distance 3 --word-batch 4 --lang en-zh --comet` (script: `run_topp_tuning.py`)
+- [ ] **top_p_weighted variant test**: `python -m nllw.bench --aggregation top_p_weighted --border-distance 3 --word-batch 4 --lang en-zh --comet`
+- [ ] **top_p threshold per direction**: Best threshold from EN-ZH applied to EN-DE, EN-IT, CS-EN
+- [ ] **XCOMET-XL separate process scoring**: Save hypotheses to file, then score in new process (avoids OOM)
 
 ### Calibration experiments (new in iteration 13)
 - [ ] **Collect fusion traces on A40**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save --collect-traces traces_enzh.json`

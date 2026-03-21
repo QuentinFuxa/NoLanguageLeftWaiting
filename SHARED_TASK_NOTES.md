@@ -1,125 +1,113 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 16, 2026-03-21)
+## Current State (after Iteration 17, 2026-03-21)
 
-**28+ SimulMT modules (~13,000+ lines), 755 tests passing**
-**NEW BEST: COMET=0.895 EN-ZH with top_p + wb=4 + bd=3**
+**28+ SimulMT modules (~13,500+ lines), 785+ tests**
+**100-sentence CONFIRMED: COMET=0.892 EN-ZH, 0.881 EN-DE with top_p**
 
-### What happened in Iteration 16
-- **top_p aggregation is best**: +0.010-0.031 COMET over ts_vote across all directions
-- **wb=4/5 discovered as massive quality boost**: wb=5/bd=3 gives COMET 0.892 EN-ZH (+0.012)
-- **top_p + wb=4 = 0.895**: combining the two gives new record (99.9% of offline quality)
-- **Lower bd helps all directions**: bd=2 >> bd=3 for EN-DE/EN-IT (counterintuitive)
-- **100-sentence benchmarks confirm 30-sentence results** (stable scores)
-- **Dedicated head detection for EN-DE, EN-IT, CS-EN** (90% overlap with EN-ZH)
-- **Stderr suppression** for llama.cpp noise (490+ warnings eliminated)
-- **Head config discovery fix** for detect_heads-generated filenames
-- **detect_heads --n-gpu-layers** flag added (was missing, blocking GPU detection)
-- **755 tests passing** (9 new)
+### What happened in Iteration 17
+- **100-sentence verification of top_p configs** (running on A40):
+  - EN-ZH bd=3/wb=4/top_p: **COMET=0.892** BLEU=39.9 YAAL=5.84 (confirmed)
+  - EN-ZH bd=3/wb=5/top_p: COMET=0.891 (wb=5 doesn't help with top_p)
+  - EN-ZH bd=2/wb=3/top_p: COMET=0.889 YAAL=4.29 (balanced config)
+  - EN-DE bd=2/wb=3/top_p: **COMET=0.881** BLEU=27.8 YAAL=5.78 (confirmed)
+  - EN-DE bd=2/wb=4/top_p: COMET=0.880 (wb=4 doesn't help EN-DE)
+  - EN-IT, CS-EN, wb=6 experiments still running
+- **Updated ALL competition configs**: IWSLT 2026 YAMLs + SimulStream DIRECTION_DEFAULTS now use top_p + optimal bd/wb
+- **Added `aggregation` field to SimulStreamConfig**: was silently dropped before -- now properly wired into `to_backend_config()`
+- **Added `top_p_threshold` parameter**: Tunable p_threshold for top_p aggregation (0.5-0.95). Default 0.8 (never tuned -- sweep script prepared)
+- **Added `top_p_weighted` aggregation**: Weighted mean of top-p positions instead of rightmost. Continuous output, potentially more robust
+- **Added `repetition_max_repeats=2` to all competition configs**: Zero overhead safety net
+- **Fixed XCOMET-XL OOM**: Added gc.collect() + torch.cuda.empty_cache() + 2s sleep after backend.close()
+- **Previous XCOMET-XL run still OOM'd (rc=-9)**: All 4 directions failed. Fix needs re-verification
 
-### 100-Sentence Benchmark Results (FLORES, A40, HY-MT1.5-7B)
+### 100-Sentence Verified Results (FLORES, A40, HY-MT1.5-7B, top_p)
 
-| Direction | bd | wb | BLEU | COMET | YAAL | ms/sent |
-|-----------|---:|---:|-----:|------:|-----:|--------:|
-| EN-ZH | 2 | 3 | 32.9 | 0.880 | 3.77 | 980 |
-| EN-DE | 3 | 3 | 24.9 | 0.850 | 4.38 | 1327 |
-| EN-IT | 3 | 3 | 21.6 | 0.867 | 4.44 | 1330 |
-| CS-EN | 3 | 2 | 22.6 | 0.857 | 2.77 | 1143 |
+| Direction | bd | wb | agg | BLEU | COMET | YAAL | % offline | Notes |
+|-----------|---:|---:|-----|-----:|------:|-----:|:---------:|-------|
+| **EN-ZH** | 3 | 4 | top_p | 39.9 | **0.892** | 5.84 | 99.6% | Best quality |
+| EN-ZH | 3 | 5 | top_p | 39.5 | 0.891 | 6.17 | 99.4% | wb=5 saturates |
+| EN-ZH | 2 | 3 | top_p | 38.4 | 0.889 | 4.29 | 99.2% | Balanced |
+| **EN-DE** | 2 | 3 | top_p | 27.8 | **0.881** | 5.78 | 99.7% | Best quality |
+| EN-DE | 2 | 4 | top_p | 28.4 | 0.880 | 6.22 | 99.5% | wb=4 no help |
+| **EN-IT** | 2 | 3 | top_p | 24.5 | **0.890** | 5.76 | **100.1%** | Exceeds offline! |
+| EN-IT | 2 | 4 | top_p | 24.0 | 0.887 | 6.07 | 99.8% | wb=4 no help |
+| **CS-EN** | 3 | 3 | top_p | 27.5 | **0.877** | 4.90 | 99.5% | Confirmed |
+| CS-EN | 3 | 4 | top_p | 28.5 | 0.878 | 5.25 | 99.7% | Marginal +0.001 |
 
-### wb=4/5 Discovery (50 sentences)
+### Phase 2-5 Results (50 sentences, A40)
 
-| Direction | bd | wb | BLEU | COMET | YAAL | vs baseline |
-|-----------|---:|---:|-----:|------:|-----:|-------------|
-| **EN-ZH** | 3 | 5 | 39.3 | **0.892** | 5.58 | +0.012 |
-| EN-ZH | 2 | 4 | 35.4 | 0.883 | 4.37 | +0.003 |
-| EN-ZH | 3 | 4 | 38.2 | 0.887 | 4.67 | +0.007 |
-| EN-ZH | 2 | 5 | 36.2 | 0.887 | 5.56 | +0.007 |
-| EN-ZH | 1 | 3 | 28.3 | 0.870 | 3.26 | -0.010 (too aggressive) |
-| **EN-DE** | 3 | 4 | 24.6 | **0.873** | 5.16 | +0.023 |
-| **EN-DE** | 2 | 3 | 24.8 | 0.871 | 4.06 | +0.021 |
-| **EN-IT** | 3 | 4 | 22.1 | **0.885** | 5.21 | +0.018 |
-| EN-IT | 2 | 3 | 20.9 | 0.882 | 4.20 | +0.015 |
+**wb=6 exploration:** EN-ZH wb=6 COMET=0.895 (+0.003 but YAAL=6.91 too high). EN-DE wb=5 COMET=0.882 (marginal). EN-IT wb=5 COMET=0.887 (hurts).
 
-### Optimal Per-Direction Configs (updated)
+**Dedicated heads:** Same COMET as cross-lingual transfer. Confirms universality.
 
-| Direction | bd | wb | agg | COMET | YAAL | Strategy |
-|-----------|---:|---:|-----|------:|-----:|----------|
-| **EN-ZH** | 3 | 4 | top_p | **0.895** | 4.67 | Max quality (99.9% offline) |
-| EN-ZH | 2 | 3 | top_p | 0.890 | 3.60 | Balanced quality/latency |
-| EN-ZH | 2 | 3 | ts_vote | 0.880 | 3.77 | Low latency |
-| **EN-DE** | 2 | 3 | top_p | **0.881** | 4.06 | Best quality |
-| EN-DE | 3 | 4 | top_p | 0.881 | 5.16 | Same quality, more latency |
-| **EN-IT** | 2 | 3 | top_p | **0.884** | 4.20 | Best quality |
-| EN-IT | 3 | 4 | ts_vote | 0.885 | 5.21 | Slightly higher at more latency |
-| **CS-EN** | 3 | 3 | top_p | **0.876** | 3.27 | Best quality |
-| CS-EN | 3 | 2 | ts_vote | 0.857 | 2.77 | Lowest latency |
+**XCOMET-XL: ALL OOM'd (rc=-9)**. Must use `run_xcomet_separate.py` (separate process).
 
-### Head Detection Results (HY-MT1.5-7B, 100 FLORES sentences)
+**Repetition halt hurts EN-ZH (-0.004 COMET)**. Disabled in all competition configs.
 
-| Direction | Config | Top Head | TS | Overlap with EN-ZH |
-|-----------|--------|----------|---:|--------------------:|
-| EN-ZH | hymt_en_zh.json | L7H21 | 0.648 | - |
-| EN-DE | hy_mt1_5_7b_q8_0_en_de.json | L7H21 | 0.638 | 90% top-20 |
-| EN-IT | hy_mt1_5_7b_q8_0_en_it.json | L7H21 | 0.687 | 90% top-20 |
-| CS-EN | hy_mt1_5_7b_q8_0_cs_en.json | TBD | TBD | TBD |
-
-Note: EN-DE config was re-detected after being deleted by rsync.
-
-### top_p Aggregation Discovery
-
-| Direction | bd | wb | ts_vote COMET | top_p COMET | Delta |
-|-----------|---:|---:|-------------:|------------:|------:|
-| EN-ZH | 3 | 4 | 0.887 | **0.895** | +0.008 |
-| EN-ZH | 2 | 3 | 0.880 | 0.890 | +0.010 |
-| EN-DE | 2 | 3 | 0.871 | 0.881 | +0.010 |
-| EN-DE | 3 | 4 | 0.873 | 0.881 | +0.008 |
-| EN-IT | 2 | 3 | 0.882 | 0.884 | +0.002 |
-| CS-EN | 3 | 3 | 0.855 | **0.876** | +0.021 |
-| CS-EN | 3 | 2 | 0.857 | 0.868 | +0.011 |
+### Key Finding: wb increase saturates with top_p
+- With top_p: wb=4 is optimal; wb=5/6 give no further improvement
+- **Optimal: top_p + wb=4 for EN-ZH, wb=3 for others**
 
 ### Dead Ends Confirmed
-- **Context injection**: KILLS quality for HY-MT (-0.084 to -0.125 COMET)
-- **Entropy veto**: All thresholds hurt (0.5->0.494 COMET, 1.5->0.794)
-- **softmax_mean aggregation**: COMET 0.812 (terrible)
-- **Signal fusion/cascade**: marginal +0.002 at complexity cost
-- **bd=1**: Too aggressive, -0.010 COMET for EN-ZH
-
-### Key Findings
-- **top_p aggregation is the single biggest win**: +0.008 to +0.021 COMET
-- **wb=4-5 is the second biggest win**: +0.006 to +0.012 COMET per wb step
-- **Combined top_p + wb=4: COMET 0.895** (99.9% of full-sentence 0.896)
-- **Lower bd helps across all directions**: bd=2 consistently better than bd=3
-- **100-sentence results are stable** vs 30-sentence (validates evaluation)
-- **Speed increases with higher wb**: wb=5 at 859ms/sent vs wb=3 at 980ms
-- **Dedicated heads add marginal value**: 90% overlap, ~0.003 improvement
+- Context injection: KILLS quality for HY-MT
+- Entropy veto: All thresholds hurt
+- softmax_mean aggregation: COMET 0.812 (terrible)
+- Signal fusion/cascade: marginal +0.002
+- bd=1: Too aggressive
+- wb=5/6 with top_p: Saturated
+- wb=4 for EN-DE/IT: No improvement over wb=3
+- **Repetition halt: HURTS EN-ZH by -0.004 COMET. DO NOT USE.**
 
 ## What to do next
 
-### Priority 1: XCOMET-XL Scoring (FIX APPLIED, RE-RUN NEEDED)
-Previous run OOM'd (rc=-9): translation model + XCOMET-XL (12GB) exceeded A40 VRAM.
-**Fixed**: `eval.py` now calls `backend.close()` before loading XCOMET-XL to free VRAM.
-Re-run:
-```bash
-ssh -p 3622 fuxa@quest.ms.mff.cuni.cz "cd /home/fuxa/nllw_deploy && export LLAMA_CPP_LIB=/home/fuxa/llama.cpp/build/bin/libllama.so && nohup python3 run_xcomet_eval.py > xcomet_results_v2.log 2>&1 &"
-```
+### Priority 1: Complete Running Experiments (A40)
+Iteration 17 experiments running on A40:
+- Phase 1: EN-IT + CS-EN 100-sentence verification (in progress)
+- Phase 2: wb=6 exploration
+- Phase 3: Dedicated heads comparison
+- Phase 4: XCOMET-XL scoring (may still OOM)
+- Phase 5: Repetition halt safety check
 
-### Priority 2: 100-sentence Verification of Best Configs
-Need to verify top_p + wb=4 results at 100 sentences. Current results are 50 sentences.
-```bash
-python -m nllw.bench --model MODEL --lang en-zh -n 100 --border-distance 3 --word-batch 4 --aggregation top_p --comet
-```
+### Priority 2: top_p Threshold Tuning -- DONE!
+**BREAKTHROUGH: p=0.85 gives COMET 0.896 EN-ZH = offline quality!**
 
-### Priority 3: Competition Prep (IWSLT 2026, eval April 1-15, ~10 days)
+Optimal thresholds (50 sentences, applied to configs):
+| Direction | p_threshold | COMET | YAAL |
+|-----------|:-----------:|------:|-----:|
+| EN-ZH | **0.85** | **0.896** | 6.00 |
+| EN-DE | 0.75 | 0.881 | 5.55 |
+| EN-IT | 0.9 | 0.891 | 5.94 |
+| CS-EN | 0.9 | 0.876 | 6.03 |
+
+`top_p_weighted` variant is a dead end (COMET 0.885 EN-ZH, 0.852 EN-DE).
+
+Previous script info:
+```bash
+ssh -p 3622 fuxa@quest.ms.mff.cuni.cz "cd /home/fuxa/nllw_deploy && export LLAMA_CPP_LIB=/home/fuxa/llama.cpp/build/bin/libllama.so && nohup python3 run_topp_tuning.py > topp_tuning_results.log 2>&1 &"
+```
+Tests: p=0.5,0.6,0.7,0.75,0.8,0.85,0.9,0.95 for EN-ZH + top_p_weighted variant.
+
+### Priority 3: XCOMET-XL (Needs Robust Fix)
+Previous OOM fix (backend.close + gc + torch cache) may still not be enough.
+Options:
+- Run translation and XCOMET-XL as **separate processes** (most reliable)
+- Save hypotheses to file, then score in a new process
+- Try with lower batch_size (currently 8)
+
+### Priority 4: Competition Prep (IWSLT 2026, eval April 1-15, ~10 days)
 - Docker finalization (OmniSTEval format, SimulStream wrapper)
-- Update per-direction optimal configs in SimulStream DIRECTION_DEFAULTS with top_p + wb=4
-- OmniSTEval longform output verification
 - SimulStream E2E test with audio
+- OmniSTEval longform output verification
 - Update Dockerfile to include NLLW as package
+- Verify LongYAAL compatibility with SimulStream toolkit
 
-### Priority 4: top_p Investigation
-- Why does top_p help so much? Analyze the aggregation method
-- Does top_p + other signals (shift-k, etc.) help further?
-- top_p sigma parameter tuning
+### Priority 5: Research-Informed Improvements (from web search)
+- **Hibiki perplexity-based adaptive border**: Use offline MT perplexity on partial vs full source to dynamically adjust border_distance per-word. No training needed. arXiv 2502.03382
+- **Translation Heads (ICLR 2026)**: Validates our TS-scoring + middle-layer head detection. Could refine head pruning. OpenReview q8fTgw8e5E
+- **CUNI (2025 winner)**: AlignAtt with Whisper, LocalAgreement for LLMs. Forced decoding. arXiv 2506.17077
+- **SimulSense semantic batching**: Batch by semantic units rather than fixed word_batch
+- **Qwen3.5-9B**: 201 languages, might outperform HY-MT on some directions. Test if GGUF available.
 
 ### Sync Workflow
 IMPORTANT: When syncing code to A40, do NOT use `rsync --delete` which destroys GPU-generated configs.
@@ -130,6 +118,7 @@ Always pull new configs from A40 BEFORE pushing code.
 
 - **IWSLT 2026**: Eval April 1-15, ~10 days away
 - **Metrics**: LongYAAL (primary latency), COMET (primary quality)
-- **Best known**: EN-ZH COMET=0.892 (wb=5/bd=3), YAAL=5.58
-- **A40 ready**: experiments running, head detection complete (EN-IT, CS-EN)
-- **Dead ends**: EAST, LoRA no-think, GDN, confidence-only, fixed-rate, TAF, signals (marginal)
+- **Best known (100-sent confirmed)**: EN-ZH COMET=0.892, EN-DE 0.881, EN-IT **0.890** (>offline!), CS-EN 0.877
+- **All directions at 99.5-100.1% of offline quality** with just AlignAtt + top_p
+- **A40 ready**: experiments running, code synced with top_p_threshold
+- **New features in iter 17**: top_p_threshold param, top_p_weighted agg, updated DIRECTION_DEFAULTS

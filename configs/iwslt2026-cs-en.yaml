@@ -1,8 +1,8 @@
 # IWSLT 2026 SST -- CS-EN optimal configuration
 # Model: HY-MT1.5-7B-Q8_0.gguf
-# Best FLORES (iteration 15): COMET=0.853, YAAL=2.87 at bd=3/wb=2
-# Aggressive: COMET=0.809, YAAL=2.06 at bd=2/wb=1
-# Previous best (iwslt26-sst): XCOMET-XL 0.908
+# Best FLORES (iteration 16): COMET=0.876, YAAL=3.27 at bd=3/wb=3/top_p
+# Previous: COMET=0.857 (iter 16, bd=3/wb=2/ts_vote)
+# top_p gives biggest delta here: +0.021 COMET over ts_vote
 # Note: uses cross-lingual head transfer from en-zh (>97% TS mass)
 
 model_path: /app/models/hymt1.5-7b-q8_0.gguf
@@ -11,11 +11,16 @@ direction: cs-en
 backend_type: alignatt
 prompt_format: hymt
 border_distance: 3
-word_batch: 2
+word_batch: 3
+aggregation: top_p
+top_p_threshold: 0.9   # Tuned: COMET 0.876 (+0.002 over 0.80)
 context_sentences: 0
 n_ctx: 2048
 n_gpu_layers: 99
 top_k_heads: 10
+
+# Repetition halt: not tested for CS-EN, disabled by default
+# repetition_max_repeats: 2
 
 # SimulStream settings
 sample_rate: 16000

@@ -287,11 +287,24 @@ def evaluate_backend(
     # Compute XCOMET-XL
     # NOTE: XCOMET-XL (~12GB VRAM) may OOM if the translation model is still loaded.
     # Close the backend to free GPU VRAM before loading the XCOMET-XL model.
+    # We also force garbage collection and CUDA cache clearing to ensure VRAM is freed.
     if compute_xcomet_score:
         if hasattr(backend, 'close'):
             if verbose:
                 print("  Closing backend to free VRAM for XCOMET-XL...", file=sys.stderr)
             backend.close()
+        # Force garbage collection to release any remaining GPU references
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                torch.cuda.synchronize()
+        except ImportError:
+            pass
+        import time as _time
+        _time.sleep(2)  # Allow CUDA driver to reclaim memory
         try:
             score, _ = compute_comet(
                 sources, hypotheses, references,
