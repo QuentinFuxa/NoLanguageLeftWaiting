@@ -179,6 +179,7 @@ class SimulMTBackend(ABC):
 
     def __init__(self, config: BackendConfig):
         self.config = config
+        self._trace_collector = None
 
     @abstractmethod
     def translate(self, source_word: str, is_final: bool = False,
@@ -211,6 +212,14 @@ class SimulMTBackend(ABC):
     def get_full_translation(self) -> str:
         """Get the full committed translation so far."""
         return ""
+
+    def set_trace_collector(self, collector) -> None:
+        """Set a trace collector for fusion calibration.
+
+        The collector's record_step() will be called at each border
+        decision point with signal scores. Pass None to disable.
+        """
+        self._trace_collector = collector
 
     @property
     def name(self) -> str:
