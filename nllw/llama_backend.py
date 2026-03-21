@@ -13,13 +13,37 @@ Requires llama.cpp built with PR #20086 (attention weight extraction).
 """
 
 import ctypes
+import ctypes.util
 import os
 import sys
 import subprocess
 import tempfile
+from contextlib import contextmanager
 from typing import List, Optional, Tuple
 
 import numpy as np
+
+
+# ---------------------------------------------------------------------------
+# Stderr suppression (Metal JIT logs + get_attn_ith warnings flood output)
+# ---------------------------------------------------------------------------
+@contextmanager
+def _suppress_stderr():
+    """Temporarily redirect stderr to /dev/null."""
+    try:
+        stderr_fd = sys.stderr.fileno()
+        saved_fd = os.dup(stderr_fd)
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, stderr_fd)
+        os.close(devnull)
+        try:
+            yield
+        finally:
+            os.dup2(saved_fd, stderr_fd)
+            os.close(saved_fd)
+    except (AttributeError, OSError):
+        # No fileno (e.g. in tests with captured stderr) -- skip suppression
+        yield
 
 
 # ---------------------------------------------------------------------------
@@ -304,11 +328,19 @@ def cleanup():
     _lib.llama_backend_free()
 
 
-def load_model(path: str, n_gpu_layers: int = 0):
-    """Load a GGUF model. Returns an opaque model pointer."""
+def load_model(path: str, n_gpu_layers: int = 0, quiet: bool = True):
+    """Load a GGUF model. Returns an opaque model pointer.
+
+    Args:
+        quiet: If True, suppress Metal JIT / CUDA graph warmup logs on stderr.
+    """
     _bind_signatures()
     params = _lib.llama_model_default_params()
-    model = _lib.llama_model_load_from_file(path.encode(), params)
+    if quiet:
+        with _suppress_stderr():
+            model = _lib.llama_model_load_from_file(path.encode(), params)
+    else:
+        model = _lib.llama_model_load_from_file(path.encode(), params)
     if not model:
         raise RuntimeError(f"Failed to load model from {path}")
     return model
@@ -320,15 +352,22 @@ def free_model(model):
 
 
 def create_context(model, n_ctx: int = 2048, n_batch: int = 2048,
-                    attn_weights: bool = True, n_gpu_layers: int = 0):
+                    attn_weights: bool = True, n_gpu_layers: int = 0,
+                    quiet: bool = True):
     """Create a llama_context with optional attention weight extraction.
 
     Args:
         n_gpu_layers: When > 0, offloads KV cache to GPU (offload_kqv=true).
+        quiet: If True, suppress CUDA graph warmup / Metal JIT logs.
     """
     shim = _compile_shim()
-    ctx = shim.create_ctx_with_attn(model, n_ctx, n_batch,
-                                     1 if attn_weights else 0, n_gpu_layers)
+    if quiet:
+        with _suppress_stderr():
+            ctx = shim.create_ctx_with_attn(model, n_ctx, n_batch,
+                                             1 if attn_weights else 0, n_gpu_layers)
+    else:
+        ctx = shim.create_ctx_with_attn(model, n_ctx, n_batch,
+                                         1 if attn_weights else 0, n_gpu_layers)
     if not ctx:
         raise RuntimeError("Failed to create llama_context")
     return ctx
@@ -409,7 +448,11 @@ def tokens_to_text(vocab, token_ids: List[int], special: bool = True, errors: st
 
 def decode_batch_at(ctx, tokens: List[int], pos_start: int = 0, seq_id: int = 0,
                     output_last_only: bool = True) -> int:
-    """Decode a batch of tokens starting at pos_start. Returns decode status."""
+    """Decode a batch of tokens starting at pos_start. Returns decode status.
+
+    Suppresses stderr to avoid noisy get_attn_ith warnings for non-output
+    tokens (expected when attention heads are configured but logits=0).
+    """
     n = len(tokens)
     if n == 0:
         return 0
@@ -421,7 +464,8 @@ def decode_batch_at(ctx, tokens: List[int], pos_start: int = 0, seq_id: int = 0,
         batch.seq_id[i][0] = seq_id
         batch.logits[i] = 1 if (not output_last_only or i == n - 1) else 0
     batch.n_tokens = n
-    ret = _lib.llama_decode(ctx, batch)
+    with _suppress_stderr():
+        ret = _lib.llama_decode(ctx, batch)
     _lib.llama_batch_free(batch)
     return ret
 

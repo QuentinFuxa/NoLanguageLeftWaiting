@@ -52,7 +52,7 @@ from .alignatt import (
     prediction_stability_supports_write,
 )
 from .complexity import adaptive_params_from_complexity
-from .fusion import fused_border_check, get_fusion_weights, FusionWeights
+from .fusion import fused_border_check, get_fusion_weights
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
 from .backend_protocol import (
     SimulMTBackend,
@@ -76,10 +76,15 @@ def _find_heads_for_model(model_path: str, direction: str) -> Optional[str]:
 
     # Build search patterns
     patterns = []
-    if "hy-mt" in model_name or "hymt" in model_name:
+    if "hy-mt" in model_name or "hymt" in model_name or "hy_mt" in model_name:
         if "1.8b" in model_name or "1_8b" in model_name:
             patterns.append(f"hymt1.8b_{direction_str}")
         else:
+            # Try both naming conventions:
+            # - detect_heads produces: hy_mt1_5_7b_q8_0_en_de.json
+            # - original iwslt26-sst configs: hymt_en_zh.json
+            patterns.append(f"hy_mt1_5_7b_q8_0_{direction_str}")
+            patterns.append(f"hy_mt1_5_{direction_str}")
             patterns.append(f"hymt_{direction_str}")
     if "qwen3.5" in model_name or "qwen3_5" in model_name:
         for size in ["4b", "9b"]:
@@ -106,7 +111,14 @@ def _find_heads_for_model(model_path: str, direction: str) -> Optional[str]:
     # Cross-lingual head transfer fallback: use any direction for same model
     # Validated: EuroLLM/HY-MT/Qwen3.5 heads transfer >97% TS mass across directions
     if patterns:
-        model_prefix = patterns[0].rsplit("_", 2)[0]  # e.g. "hymt" from "hymt_en_zh"
+        # Extract model identifier by removing the direction suffix
+        # "hy_mt1_5_7b_q8_0_en_de" -> strip "_en_de" -> "hy_mt1_5_7b_q8_0"
+        # "hymt_en_zh" -> strip "_en_zh" -> "hymt"
+        model_prefix = patterns[-1]  # Use the simplest pattern
+        for suffix in [f"_{direction_str}", f"_{direction_str.replace('_', '-')}"]:
+            if model_prefix.endswith(suffix):
+                model_prefix = model_prefix[:-len(suffix)]
+                break
         for fname in os.listdir(configs_dir):
             if fname.endswith(".json") and model_prefix in fname.lower():
                 return os.path.join(configs_dir, fname)
@@ -433,7 +445,7 @@ class AlignAttBackend(SimulMTBackend):
                             if self._trace_collector is not None:
                                 self._trace_collector.record_step(
                                     source_words_seen=len(self._source_words),
-                                    tokens_generated=n_gen,
+                                    tokens_generated=len(new_ids),
                                     scores=dict(fusion_diag.scores),
                                     actual_decision=border_hit,
                                     fusion_score=fusion_diag.fusion_score,

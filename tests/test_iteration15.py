@@ -132,25 +132,24 @@ class TestKVCacheOffload:
 class TestCrossLingualHeadFallback:
     """Test that head auto-discovery falls back to cross-lingual transfer."""
 
-    def test_hymt_en_de_falls_back_to_en_zh(self):
-        """HY-MT EN-DE should fall back to EN-ZH heads (validated >97% transfer)."""
+    def test_hymt_en_de_finds_config(self):
+        """HY-MT EN-DE should find a head config (dedicated or cross-lingual fallback)."""
         from nllw.alignatt_backend import _find_heads_for_model
         import os
 
-        # Should find hymt_en_zh.json as fallback
         result = _find_heads_for_model(
             "/path/to/HY-MT1.5-7B.Q8_0.gguf", "en-de"
         )
-        # Check the configs dir exists
         configs_dir = os.path.join(
             os.path.dirname(__file__), "..", "nllw", "heads", "configs"
         )
         if os.path.isdir(configs_dir):
-            # If we have hymt configs at all, should find something
-            hymt_files = [f for f in os.listdir(configs_dir) if "hymt" in f and "1.8b" not in f]
+            # Should find either dedicated en_de or cross-lingual fallback
+            hymt_files = [f for f in os.listdir(configs_dir)
+                          if ("hymt" in f or "hy_mt" in f) and "1.8b" not in f]
             if hymt_files:
-                assert result is not None, "Should fall back to any hymt config"
-                assert "hymt" in result.lower()
+                assert result is not None, "Should find hymt head config"
+                assert "hymt" in result.lower() or "hy_mt" in result.lower()
 
     def test_exact_match_preferred(self):
         """Exact direction match should be preferred over fallback."""

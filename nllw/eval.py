@@ -285,7 +285,13 @@ def evaluate_backend(
             print(f"  COMET computation failed: {e}", file=sys.stderr)
 
     # Compute XCOMET-XL
+    # NOTE: XCOMET-XL (~12GB VRAM) may OOM if the translation model is still loaded.
+    # Close the backend to free GPU VRAM before loading the XCOMET-XL model.
     if compute_xcomet_score:
+        if hasattr(backend, 'close'):
+            if verbose:
+                print("  Closing backend to free VRAM for XCOMET-XL...", file=sys.stderr)
+            backend.close()
         try:
             score, _ = compute_comet(
                 sources, hypotheses, references,
