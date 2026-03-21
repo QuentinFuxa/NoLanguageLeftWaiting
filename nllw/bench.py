@@ -90,6 +90,9 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "attshift": "attention_shift",
         "fusion": "signal_fusion",
         "fthr": "fusion_threshold",
+        "temp": "generation_temperature",
+        "edt": "entropy_dynamic_temperature",
+        "conftrim": "confidence_trim_threshold",
     }
 
     grid = {}
@@ -167,6 +170,9 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "attention_shift": args.attention_shift,
         "signal_fusion": args.signal_fusion,
         "fusion_threshold": args.fusion_threshold,
+        "generation_temperature": args.generation_temperature,
+        "entropy_dynamic_temperature": args.entropy_dynamic_temperature,
+        "confidence_trim_threshold": args.confidence_trim,
     }
 
 
@@ -472,6 +478,12 @@ def main():
                         help="Enable weighted signal fusion (replaces boolean cascade)")
     parser.add_argument("--fusion-threshold", type=float, default=0.0,
                         help="Fusion decision threshold (0.0=balanced)")
+    parser.add_argument("--generation-temperature", type=float, default=0.0,
+                        help="Generation temperature (0.0=greedy, 0.1-0.3=exploration)")
+    parser.add_argument("--entropy-dynamic-temperature", action="store_true",
+                        help="EDT: per-token adaptive temperature from logit entropy (arxiv 2403.14541)")
+    parser.add_argument("--confidence-trim", type=float, default=None,
+                        help="Trim trailing tokens below this logprob threshold (None=disabled, -3.0=recommended)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")
