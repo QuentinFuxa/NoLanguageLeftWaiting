@@ -138,3 +138,33 @@ class TestComputeAllMetrics:
         assert m.dal > 0
         assert m.n_source == 5
         assert m.n_target == 4
+
+
+class TestBLEUTokenization:
+    """Test language-aware BLEU tokenization."""
+
+    def test_bleu_tokenize_chinese(self):
+        from nllw.metrics import _bleu_tokenize
+        assert _bleu_tokenize("zh") == "zh"
+        assert _bleu_tokenize("ja") == "zh"
+
+    def test_bleu_tokenize_default(self):
+        from nllw.metrics import _bleu_tokenize
+        assert _bleu_tokenize("en") == "13a"
+        assert _bleu_tokenize("de") == "13a"
+        assert _bleu_tokenize(None) == "13a"
+
+    def test_chinese_bleu_nonzero(self):
+        from nllw.metrics import compute_bleu
+        # Chinese text that should have overlap
+        hyp = "我们 现在 已经 拥有 了 小鼠"
+        ref = "我们现在有小鼠"
+        score = compute_bleu(hyp, ref, target_lang="zh")
+        assert score > 0, "Chinese BLEU should be > 0 for similar texts"
+
+    def test_chinese_corpus_bleu_nonzero(self):
+        from nllw.metrics import compute_bleu_corpus
+        hyps = ["我们现在已经拥有了小鼠"]
+        refs = ["我们现在有小鼠"]
+        score = compute_bleu_corpus(hyps, refs, target_lang="zh")
+        assert score > 0, "Chinese corpus BLEU should be > 0"
