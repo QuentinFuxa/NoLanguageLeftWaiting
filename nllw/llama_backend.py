@@ -450,8 +450,12 @@ def set_attn_heads(ctx, layers: List[int], heads: List[int]):
     _lib.llama_set_attn_heads(ctx, l_arr, h_arr, n)
 
 
-def get_attn_weights(ctx, token_idx: int, n_pairs: int, ctx_size: int) -> Optional[np.ndarray]:
+def get_attn_weights(ctx, token_idx: int, n_pairs: int, ctx_size: int = 0) -> Optional[np.ndarray]:
     """Get attention weights for a given output token.
+
+    The internal layout is [n_pairs * n_ctx] floats, where n_ctx is the full
+    context window size.  ``ctx_size`` is kept for backward compat but ignored;
+    the stride is always the true n_ctx obtained from the context.
 
     Returns numpy array of shape (n_pairs, n_kv) or None.
     """
@@ -461,9 +465,11 @@ def get_attn_weights(ctx, token_idx: int, n_pairs: int, ctx_size: int) -> Option
     n_kv = _lib.llama_get_attn_n_kv(ctx)
     if n_kv <= 0:
         return None
+    # Stride between heads is n_ctx (full context window), NOT current pos
+    full_n_ctx = int(n_ctx(ctx))
     result = np.zeros((n_pairs, n_kv), dtype=np.float32)
     for p in range(n_pairs):
-        offset = p * ctx_size
+        offset = p * full_n_ctx
         arr = (ctypes.c_float * n_kv).from_address(ctypes.addressof(ptr.contents) + offset * 4)
         result[p] = np.frombuffer(arr, dtype=np.float32)
     return result

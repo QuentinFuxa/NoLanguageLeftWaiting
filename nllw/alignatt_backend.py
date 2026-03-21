@@ -145,7 +145,7 @@ class AlignAttBackend(SimulMTBackend):
 
         # Initialize llama.cpp
         ll.init()
-        self._model = ll.load_model(config.model_path)
+        self._model = ll.load_model(config.model_path, n_gpu_layers=config.n_gpu_layers)
         self._vocab = ll.get_vocab(self._model)
         self._nv = ll.n_vocab(self._vocab)
         self._eos_id = ll.vocab_eos(self._vocab)
