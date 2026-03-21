@@ -249,6 +249,18 @@ class BackendConfig:
     # None=disabled (commit all generated tokens).
     # -3.0=recommended (trim tokens with logprob < -3.0).
     confidence_trim_threshold: Optional[float] = None
+    # Anti-LM contrastive decoding (Sia et al., NAACL 2024, arxiv 2311.08324):
+    # Subtract source-language continuation penalty from translation logits.
+    # Prevents hallucination and source copying by penalizing tokens that the
+    # model would generate as source-language continuation rather than translation.
+    # The anti-LM logits come from a single forward pass on source text only
+    # (no translation instructions), computed once per translate() call.
+    # False=disabled, True=enabled.
+    anti_lm: bool = False
+    # Decay rate for Anti-LM penalty. Penalty = gamma^step (strongest at first
+    # generated token, decays exponentially). 0.3 recommended by Sia et al.
+    # Lower values = faster decay. Range: 0.1-1.0.
+    anti_lm_gamma: float = 0.3
     # GPU offloading: number of layers to offload. 0=CPU, 99=all layers.
     n_gpu_layers: int = 0
 

@@ -93,6 +93,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "temp": "generation_temperature",
         "edt": "entropy_dynamic_temperature",
         "conftrim": "confidence_trim_threshold",
+        "antilm": "anti_lm",
+        "almgamma": "anti_lm_gamma",
     }
 
     grid = {}
@@ -173,6 +175,8 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "generation_temperature": args.generation_temperature,
         "entropy_dynamic_temperature": args.entropy_dynamic_temperature,
         "confidence_trim_threshold": args.confidence_trim,
+        "anti_lm": args.anti_lm,
+        "anti_lm_gamma": args.anti_lm_gamma,
     }
 
 
@@ -484,6 +488,10 @@ def main():
                         help="EDT: per-token adaptive temperature from logit entropy (arxiv 2403.14541)")
     parser.add_argument("--confidence-trim", type=float, default=None,
                         help="Trim trailing tokens below this logprob threshold (None=disabled, -3.0=recommended)")
+    parser.add_argument("--anti-lm", action="store_true",
+                        help="Anti-LM contrastive decoding: penalize source-language continuation (arxiv 2311.08324)")
+    parser.add_argument("--anti-lm-gamma", type=float, default=0.3,
+                        help="Anti-LM decay rate (0.3=recommended). Penalty = gamma^step.")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")
