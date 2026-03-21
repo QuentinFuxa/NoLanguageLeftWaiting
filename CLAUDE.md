@@ -147,7 +147,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~14,000 lines across 29 SimulMT modules, 810+ tests
+### What exists now: ~14,200 lines across 30 SimulMT modules, 859 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -170,7 +170,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `experiment.py` | 359 | Experiment YAML config/result registry |
 | `analysis.py` | 309 | Pareto frontier, edge cases, report generation |
 | `detect_heads.py` | 559 | Auto alignment head detection for any GGUF model |
-| `metrics.py` | 330 | BLEU, COMET, xCOMET-XL wrappers + all latency metrics + NE (Normalized Erasure) |
+| `metrics.py` | 560 | BLEU, COMET, xCOMET-XL + LongYAAL (IWSLT primary), StreamLAAL, all latency metrics + NE |
 | `bench.py` | 365 | Unified one-command benchmarking CLI with sweep, compare, 20+ shortnames |
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
@@ -178,7 +178,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `alignatt.py` | 1750+ | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL + source coverage + monotonicity + n-gram repetition |
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
-| `simulstream.py` | 420 | SimulStream SpeechProcessor wrapper for IWSLT 2026 submission |
+| `simulstream.py` | 834 | SimulStream SpeechProcessor wrapper, env-var config, auto-detect heads, direction switching |
 | `fusion.py` | 600 | Weighted signal fusion: 8 signals -> continuous scores -> weighted sum -> border decision |
 | `calibrate.py` | 650 | Fusion weight calibration: trace collection, alignment-based labeling, grid search optimization |
 | `xcomet_scorer.py` | 220 | Standalone XCOMET-XL scorer (separate process, avoids OOM) |

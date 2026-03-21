@@ -228,7 +228,7 @@ def run_comparison(args):
 
     # Print comparison table
     print("\n=== Comparison ===")
-    header = f"{'Backend':<20} {'BLEU':>6} {'COMET':>7} {'AL':>6} {'YAAL':>6} {'AP':>6} {'ms/sent':>8}"
+    header = f"{'Backend':<20} {'BLEU':>6} {'COMET':>7} {'LongYAAL':>9} {'YAAL':>6} {'AP':>6} {'ms/sent':>8}"
     print(header)
     print("-" * len(header))
     for r in results:
@@ -236,7 +236,7 @@ def run_comparison(args):
         bleu_str = f"{r.bleu:.1f}" if r.bleu else "  -  "
         print(
             f"{r.backend_type:<20} {bleu_str:>6} {comet_str:>7} "
-            f"{r.avg_al:>6.2f} {r.avg_yaal:>6.2f} {r.avg_ap:>6.3f} "
+            f"{r.avg_longyaal:>9.2f} {r.avg_yaal:>6.2f} {r.avg_ap:>6.3f} "
             f"{r.avg_time_per_sentence_ms:>8.0f}"
         )
 
@@ -267,14 +267,14 @@ def run_sweep(args):
     # Print results table
     param_keys = list(param_grid.keys())
     print(f"\n=== Sweep Results ({len(results)} configs) ===")
-    header = "  ".join(f"{k:>6}" for k in param_keys) + f" {'BLEU':>6} {'COMET':>7} {'AL':>6} {'YAAL':>6}"
+    header = "  ".join(f"{k:>6}" for k in param_keys) + f" {'BLEU':>6} {'COMET':>7} {'LongYAAL':>9} {'YAAL':>6}"
     print(header)
     print("-" * len(header))
     for r in results:
         params = "  ".join(f"{r.config.get(k, '-'):>6}" for k in param_keys)
         comet_str = f"{r.comet:.3f}" if r.comet else "  -  "
         bleu_str = f"{r.bleu:.1f}" if r.bleu else "  -  "
-        print(f"{params} {bleu_str:>6} {comet_str:>7} {r.avg_al:>6.2f} {r.avg_yaal:>6.2f}")
+        print(f"{params} {bleu_str:>6} {comet_str:>7} {r.avg_longyaal:>9.2f} {r.avg_yaal:>6.2f}")
 
     return results
 

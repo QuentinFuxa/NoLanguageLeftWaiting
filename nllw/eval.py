@@ -125,6 +125,8 @@ class EvalResult:
     avg_al: float = 0.0
     avg_laal: float = 0.0
     avg_yaal: float = 0.0
+    avg_longyaal: float = 0.0       # IWSLT 2026 PRIMARY latency metric
+    avg_stream_laal: float = 0.0    # IWSLT 2026 secondary latency metric
     avg_ap: float = 0.0
     avg_dal: float = 0.0
     avg_max_cw: float = 0.0
@@ -153,9 +155,10 @@ class EvalResult:
         if self.xcomet:
             lines[-1] += f" XCOMET={self.xcomet:.3f}"
         lines.extend([
-            f"  Latency: AL={self.avg_al:.2f} LAAL={self.avg_laal:.2f} "
-            f"YAAL={self.avg_yaal:.2f} AP={self.avg_ap:.3f} DAL={self.avg_dal:.2f}",
-            f"  MaxCW={self.avg_max_cw:.1f} | {self.avg_time_per_sentence_ms:.0f}ms/sent",
+            f"  Latency: LongYAAL={self.avg_longyaal:.2f} YAAL={self.avg_yaal:.2f} "
+            f"StreamLAAL={self.avg_stream_laal:.2f} AL={self.avg_al:.2f}",
+            f"  AP={self.avg_ap:.3f} DAL={self.avg_dal:.2f} MaxCW={self.avg_max_cw:.1f} | "
+            f"{self.avg_time_per_sentence_ms:.0f}ms/sent",
         ])
         return "\n".join(lines)
 
@@ -228,6 +231,8 @@ def evaluate_backend(
                 "al": trace.metrics.al,
                 "laal": trace.metrics.laal,
                 "yaal": trace.metrics.yaal,
+                "longyaal": trace.metrics.longyaal,
+                "stream_laal": trace.metrics.stream_laal,
                 "ap": trace.metrics.ap,
                 "dal": trace.metrics.dal,
                 "max_cw": trace.metrics.max_cw,
@@ -260,6 +265,8 @@ def evaluate_backend(
         avg_al=sum(m.al for m in all_metrics) / n if n else 0,
         avg_laal=sum(m.laal for m in all_metrics) / n if n else 0,
         avg_yaal=sum(m.yaal for m in all_metrics) / n if n else 0,
+        avg_longyaal=sum(m.longyaal for m in all_metrics) / n if n else 0,
+        avg_stream_laal=sum(m.stream_laal for m in all_metrics) / n if n else 0,
         avg_ap=sum(m.ap for m in all_metrics) / n if n else 0,
         avg_dal=sum(m.dal for m in all_metrics) / n if n else 0,
         avg_max_cw=sum(m.max_cw for m in all_metrics) / n if n else 0,
