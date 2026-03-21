@@ -40,6 +40,7 @@ from .alignatt import (
     check_border_shift_k,
     compute_attention_shift,
     compute_dynamic_word_batch,
+    should_defer_batch,
     compute_entropy,
     compute_entropy_change,
     compute_generation_perplexity,
@@ -199,6 +200,7 @@ class AlignAttBackend(SimulMTBackend):
         self._source_words: List[str] = []
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
+        self._defer_counter = 0  # For source-aware batching
         self._prev_step_attn: Optional[np.ndarray] = None  # For info gain
         # Cross-step tracking for REINA entropy change + prediction stability
         self._prev_first_token_entropy: Optional[float] = None
@@ -270,8 +272,18 @@ class AlignAttBackend(SimulMTBackend):
                 )
 
             # Word batching: skip until we have enough words
-            if (self._batch_counter < effective_wb
-                    and not is_final):
+            should_skip = self._batch_counter < effective_wb
+            if not should_skip and not is_final and self.config.source_aware_batching:
+                # Source-aware: defer if last word is a function word
+                src_lang = self.config.direction.split("-")[0] if self.config.direction else "en"
+                if should_defer_batch(
+                    source_word, source_lang=src_lang,
+                    max_defer=2, deferred_count=self._defer_counter,
+                ):
+                    should_skip = True
+                    self._defer_counter += 1
+
+            if should_skip and not is_final:
                 return TranslationStep(
                     text="",
                     is_final=False,
@@ -279,6 +291,7 @@ class AlignAttBackend(SimulMTBackend):
                     generation_time_ms=(time.time() - t0) * 1000,
                 )
             self._batch_counter = 0
+            self._defer_counter = 0
 
             # Create context on first call per segment
             if self._ctx is None:
@@ -733,6 +746,7 @@ class AlignAttBackend(SimulMTBackend):
         self._committed_ids = []
         self._source_words = []
         self._batch_counter = 0
+        self._defer_counter = 0
         self._gen_positions_history = []
         self._prev_gen_perplexity = None
         self._perplexity_bd_delta = 0

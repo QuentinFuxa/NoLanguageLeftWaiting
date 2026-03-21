@@ -32,10 +32,12 @@ Reference:
 """
 
 import os
+import re
 import sys
 import time
 import json
 import logging
+import unicodedata
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any, Tuple
 
@@ -528,6 +530,21 @@ class NLLWSpeechProcessor:
                 self._committed_text += output.new_string
                 self._n_sentences_in_recording += 1
 
+        # Safety valve: force reset if source words approach n_ctx limit
+        # Without this, a missing sentence boundary causes unbounded KV cache growth
+        if (self.config.longform and not is_final
+                and hasattr(self._backend, '_source_words')):
+            n_src = len(self._backend._source_words)
+            ctx_limit = int(self.config.n_ctx * 0.7)  # 70% of context window
+            if n_src > ctx_limit:
+                logger.warning(
+                    "n_ctx safety valve: %d source words approaching limit %d, forcing reset",
+                    n_src, ctx_limit,
+                )
+                self._backend.reset()
+                self._committed_text += output.new_string
+                self._n_sentences_in_recording += 1
+
         return output
 
     def _detect_sentence_boundary(self, text: str) -> bool:
@@ -748,11 +765,14 @@ class NLLWSpeechProcessor:
         """Get the full accumulated text for the current recording."""
         return self._recording_text
 
+    # Languages that require char-level delay arrays in OmniSTEval
+    _CHAR_LEVEL_LANGS = frozenset({"zh", "ja", "ko"})
+
     def to_omnisteval_entry(
         self,
         source_name: str = "recording.wav",
         source_length_ms: Optional[float] = None,
-        char_level: bool = False,
+        char_level: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """Convert the current recording's output to OmniSTEval format.
 
@@ -772,11 +792,26 @@ class NLLWSpeechProcessor:
                 If None, uses wall-clock recording time.
             char_level: If True, produce per-character delays (for zh/ja/ko).
                 If False, produce per-word delays.
+                If None (default), auto-detect from target language:
+                zh/ja/ko -> True, others -> False.
 
         Returns:
             Dict ready to be serialized as JSONL
         """
+        # Auto-detect char_level from target language if not explicitly set
+        if char_level is None:
+            char_level = self._target_lang in self._CHAR_LEVEL_LANGS
+
         prediction = self._recording_text.strip()
+
+        # Strip LLM artifacts (matching ss-to-log.py reference converter)
+        prediction = prediction.replace("<end_of_turn>", "")
+        prediction = prediction.replace("<|endoftext|>", "")
+        prediction = prediction.strip()
+
+        # Normalize whitespace: collapse multiple spaces
+        prediction = re.sub(r"  +", " ", prediction)
+
         if not prediction:
             return {
                 "source": source_name,
@@ -788,7 +823,11 @@ class NLLWSpeechProcessor:
 
         # Build per-word (or per-char) delay arrays from emission log
         if char_level:
-            units = list(prediction)
+            # NFKC normalization (matching ss-to-log.py reference converter)
+            # Critical for CJK: normalizes full-width/half-width variants
+            normalized = unicodedata.normalize("NFKC", prediction)
+            units = list(normalized)
+            prediction = normalized  # Use normalized form for output
         else:
             units = prediction.split()
 
@@ -805,7 +844,11 @@ class NLLWSpeechProcessor:
         char_pos = 0
 
         for event in self._emission_log:
-            text = event.text
+            # Strip LLM artifacts from event text too
+            text = event.text.replace("<end_of_turn>", "").replace("<|endoftext|>", "")
+            # NFKC normalize if char_level (matching prediction normalization)
+            if char_level:
+                text = unicodedata.normalize("NFKC", text)
             for _ in text:
                 if char_pos < len(prediction):
                     char_to_cu.append(event.emission_time)
@@ -841,6 +884,27 @@ class NLLWSpeechProcessor:
                     delays_cu.append(0.0)
                     delays_ca.append(0.0)
                 pos = word_end
+
+        # Validate delay count matches unit count (OmniSTEval critical invariant)
+        if len(delays_cu) != n_units:
+            logger.warning(
+                "Delay count mismatch: %d delays for %d units. Padding/trimming.",
+                len(delays_cu), n_units,
+            )
+            last_val_cu = delays_cu[-1] if delays_cu else 0.0
+            last_val_ca = delays_ca[-1] if delays_ca else 0.0
+            while len(delays_cu) < n_units:
+                delays_cu.append(last_val_cu)
+                delays_ca.append(last_val_ca)
+            delays_cu = delays_cu[:n_units]
+            delays_ca = delays_ca[:n_units]
+
+        # Enforce monotonicity: delays must be non-decreasing
+        # (OmniSTEval requirement -- emission times can't go backward)
+        for arr in (delays_cu, delays_ca):
+            for i in range(1, len(arr)):
+                if arr[i] < arr[i - 1]:
+                    arr[i] = arr[i - 1]
 
         # Source length: use provided value or wall-clock recording time
         if source_length_ms is None:
