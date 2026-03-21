@@ -847,6 +847,44 @@
 - [ ] **Quick validation**: `python scripts/run_iteration25_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick`
 - [ ] **XCOMET-XL baseline only**: `python scripts/run_iteration25_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 0`
 
+## DONE -- Iteration 26: Anti-LM Contrastive Decoding
+
+- [x] **Anti-LM contrastive decoding** (`anti_lm` config, `--anti-lm` CLI):
+  - Sia et al., NAACL 2024 (arxiv 2311.08324). Novel application to SimulMT.
+  - Subtracts source-language continuation penalty from translation logits
+  - Formula: `logits_adjusted = logits - gamma^step * anti_lm_log_probs`
+  - Anti-LM logits from one forward pass on source text only (no translation instructions)
+  - Uses separate KV cache seq_id (99) for anti-LM, cleaned up after each call
+  - Exponential decay (gamma=0.3): strongest at first token, fades over generation
+  - Prevents: source-language copying, hallucination, off-target generation
+  - Key advantage for XCOMET-XL: metric penalizes semantic errors 39x more
+  - `apply_anti_lm_penalty()`: apply contrastive penalty with decay
+  - `compute_anti_lm_log_probs()`: stable log-softmax conversion
+  - CLI: `--anti-lm --anti-lm-gamma 0.3`
+  - Sweep: `antilm=0,1`, `almgamma=0.1,0.3,0.5`
+  - Wired into AlignAtt backend generation loop (applied before EDT/temperature)
+  - **Needs GPU validation**
+- [x] **Research: beam search with AlignAtt** (deprioritized):
+  - CUNI approach: beam 0 only for border detection, +1 ChrF with beam_size=5
+  - HIGH technical risk: attention extraction with multiple llama.cpp beams untested
+  - Decision: skip for competition, focus on proven techniques
+- [x] **6-phase competition experiment script** (`scripts/run_iteration26_experiments.py`):
+  - Phase 0: XCOMET-XL baseline
+  - Phase 1: Anti-LM gamma sweep (0.1, 0.2, 0.3, 0.5, 0.8) + all directions
+  - Phase 2: Anti-LM + confidence trimming combined
+  - Phase 3: Anti-LM + EDT combined
+  - Phase 4: Best features combined (5 combos x 4 directions)
+  - Phase 5: Competition OmniSTEval output
+- [x] 1034 unit tests (22 new, all passing)
+
+### Anti-LM experiments (new in iteration 26)
+- [ ] **Anti-LM gamma sweep**: `python -m nllw.bench --anti-lm --sweep "almgamma=0.1,0.3,0.5,0.8" --lang en-zh --comet --save`
+- [ ] **Anti-LM per direction**: `python -m nllw.bench --anti-lm --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Anti-LM + confidence trim**: `python -m nllw.bench --anti-lm --confidence-trim -3.0 --lang en-zh --comet --save`
+- [ ] **Anti-LM + EDT**: `python -m nllw.bench --anti-lm --entropy-dynamic-temperature --generation-temperature 0.1 --lang en-zh --comet --save`
+- [ ] **Run full iter 26 script on A40**: `python scripts/run_iteration26_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
+- [ ] **Quick validation**: `python scripts/run_iteration26_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick`
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)

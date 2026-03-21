@@ -150,7 +150,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~15,500 lines across 30 SimulMT modules, 1003 tests
+### What exists now: ~15,700 lines across 30 SimulMT modules, 1034 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -263,6 +263,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `generation_temperature` | 0.0 | Token sampling temperature. 0.0=greedy (default). 0.1-0.3=explore alternatives near greedy path |
 | `entropy_dynamic_temperature` | False | EDT (arxiv 2403.14541): per-token adaptive temperature from logit entropy. Overrides fixed temperature |
 | `confidence_trim_threshold` | None | Trim trailing tokens below this logprob. None=disabled, -3.0=recommended. Prevents hallucinated endings |
+| `anti_lm` | False | Anti-LM contrastive decoding (Sia et al., NAACL 2024). Penalizes source-language continuation. Novel for SimulMT |
+| `anti_lm_gamma` | 0.3 | Anti-LM decay rate. Penalty = gamma^step. 0.3=recommended. Lower=faster decay |
 | `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
 | `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |

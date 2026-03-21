@@ -21,6 +21,15 @@ top_k_heads: 10
 # Repetition halt: DISABLED for EN-ZH (-0.004 COMET penalty at 50 sent)
 # repetition_max_repeats: 2
 
+# Anti-LM contrastive decoding (iter 26, arxiv 2311.08324): NEEDS GPU VALIDATION
+# Prevents source-language copying and hallucination. gamma=0.3 recommended.
+# anti_lm: true
+# anti_lm_gamma: 0.3
+
+# Confidence trimming (iter 25): NEEDS GPU VALIDATION
+# Trim trailing low-confidence tokens before commit.
+# confidence_trim_threshold: -3.0
+
 # Longform mode (competition format: one output per recording)
 longform: true
 auto_sentence_boundary: true
