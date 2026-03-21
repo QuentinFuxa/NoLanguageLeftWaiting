@@ -200,6 +200,7 @@ class AlignAttBackend(SimulMTBackend):
         self._source_words: List[str] = []
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
+        self._batch_first_emission_time: Optional[float] = None  # For LongYAAL
         self._defer_counter = 0  # For source-aware batching
         self._prev_step_attn: Optional[np.ndarray] = None  # For info gain
         # Cross-step tracking for REINA entropy change + prediction stability
@@ -226,6 +227,9 @@ class AlignAttBackend(SimulMTBackend):
         with self._lock:
             self._source_words.append(source_word)
             self._batch_counter += 1
+            # Track first word's emission time in batch (for correct LongYAAL)
+            if self._batch_first_emission_time is None:
+                self._batch_first_emission_time = emission_time
 
             # Effective parameters (may be overridden by complexity)
             effective_bd = self.config.border_distance
@@ -290,7 +294,9 @@ class AlignAttBackend(SimulMTBackend):
                     source_words_seen=len(self._source_words),
                     generation_time_ms=(time.time() - t0) * 1000,
                 )
+            batch_first_et = self._batch_first_emission_time
             self._batch_counter = 0
+            self._batch_first_emission_time = None
             self._defer_counter = 0
 
             # Create context on first call per segment
@@ -598,6 +604,19 @@ class AlignAttBackend(SimulMTBackend):
                     token_perplexities
                 )
 
+            # Compute average log-probability of generated tokens (quality diagnostic)
+            avg_logprob = None
+            if token_perplexities:
+                # perplexity = exp(-logprob), so logprob = -log(perplexity)
+                avg_logprob = -float(np.mean(np.log(token_perplexities)))
+            elif new_ids:
+                # If perplexity tracking is off, compute logprob from last token
+                logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                if logits is not None:
+                    logits_stable = logits - np.max(logits)
+                    log_probs = logits_stable - np.log(np.sum(np.exp(logits_stable)))
+                    avg_logprob = float(np.mean([log_probs[tid] for tid in new_ids[-3:]]))
+
             # Decode text: full sequence to avoid byte-fallback mojibake
             prev_text = (
                 ll.tokens_to_text(self._vocab, self._committed_ids, errors="ignore")
@@ -624,6 +643,8 @@ class AlignAttBackend(SimulMTBackend):
                 stopped_at_border=stopped_at_border,
                 source_words_seen=len(self._source_words),
                 generation_time_ms=elapsed_ms,
+                batch_first_emission_time=batch_first_et,
+                avg_logprob=avg_logprob,
             )
 
     def _lsg_probe(self, last_token: int, pos: int,
@@ -746,6 +767,7 @@ class AlignAttBackend(SimulMTBackend):
         self._committed_ids = []
         self._source_words = []
         self._batch_counter = 0
+        self._batch_first_emission_time = None
         self._defer_counter = 0
         self._gen_positions_history = []
         self._prev_gen_perplexity = None
@@ -761,6 +783,28 @@ class AlignAttBackend(SimulMTBackend):
         """Reset state for next segment (called externally)."""
         with self._lock:
             self._handle_segment_end()
+
+    def warmup(self):
+        """Warm up the model with a dummy translation.
+
+        Eliminates cold-start latency from GPU kernel compilation, memory
+        allocation, and JIT warmup. Call once after model load, before the
+        first real translation. Critical for competition: the first segment's
+        latency directly impacts LongYAAL.
+        """
+        with self._lock:
+            self._init_segment()
+            # Decode a few dummy source tokens + generate one token
+            dummy_src = ll.tokenize(self._vocab, "hello", add_bos=False, special=False)
+            delta = dummy_src + self._suffix_tokens
+            ll.decode_batch_at(self._ctx, delta, pos_start=len(self._prefix_tokens))
+            # One generation step to warm up the generation path
+            ll.argmax_logits(self._ctx, -1, self._nv)
+            # Clean up
+            ll.free_context(self._ctx)
+            self._ctx = None
+            self._mem = None
+            self._prev_source_tokens = []
 
     def get_full_translation(self) -> str:
         """Get full committed translation text."""

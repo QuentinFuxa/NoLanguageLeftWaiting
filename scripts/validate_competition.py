@@ -223,6 +223,30 @@ def validate_simulstream():
     from nllw.simulstream import process_gold_transcript_longform
     ok &= check("process_gold_transcript_longform exists", callable(process_gold_transcript_longform))
 
+    # batch_first_emission_time (iteration 22): correct LongYAAL attribution
+    from nllw.backend_protocol import TranslationStep
+    step = TranslationStep(text="test", batch_first_emission_time=1.5, avg_logprob=-2.0)
+    ok &= check("TranslationStep.batch_first_emission_time", step.batch_first_emission_time == 1.5,
+                "YAAL fix: attribute to batch start time")
+    ok &= check("TranslationStep.avg_logprob", step.avg_logprob == -2.0,
+                "Generation confidence diagnostic")
+
+    # Verify emission uses batch_first when available
+    from unittest.mock import MagicMock
+    proc5 = NLLWSpeechProcessor(SimulStreamConfig(
+        direction="en-de", auto_sentence_boundary=False))
+    proc5._is_initialized = True
+    proc5._backend = MagicMock()
+    proc5._backend.translate.return_value = TranslationStep(
+        text="Output", batch_first_emission_time=1.0)
+    proc5.process_words(["word"], emission_time=2.0)
+    if proc5._emission_log:
+        ok &= check("Emission uses batch_first_emission_time",
+                     proc5._emission_log[0].emission_time == 1000.0,
+                     "Should be 1.0s * 1000 = 1000.0ms, not 2000.0ms")
+    else:
+        ok &= check("Emission log populated", False)
+
     return ok
 
 

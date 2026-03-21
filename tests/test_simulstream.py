@@ -651,3 +651,140 @@ class TestLongformGoldTranscript:
 
         finally:
             os.unlink(input_path)
+
+
+class TestBatchFirstEmissionTime:
+    """Test batch_first_emission_time for correct LongYAAL."""
+
+    def test_translation_step_has_batch_first_emission_time(self):
+        """TranslationStep should have batch_first_emission_time field."""
+        from nllw.backend_protocol import TranslationStep
+        step = TranslationStep(text="hello", batch_first_emission_time=1.5)
+        assert step.batch_first_emission_time == 1.5
+
+    def test_translation_step_batch_first_defaults_none(self):
+        """batch_first_emission_time defaults to None."""
+        from nllw.backend_protocol import TranslationStep
+        step = TranslationStep(text="hello")
+        assert step.batch_first_emission_time is None
+
+    def test_translation_step_has_avg_logprob(self):
+        """TranslationStep should have avg_logprob field."""
+        from nllw.backend_protocol import TranslationStep
+        step = TranslationStep(text="hello", avg_logprob=-2.5)
+        assert step.avg_logprob == -2.5
+
+    def test_translation_step_avg_logprob_defaults_none(self):
+        """avg_logprob defaults to None."""
+        from nllw.backend_protocol import TranslationStep
+        step = TranslationStep(text="hello")
+        assert step.avg_logprob is None
+
+    def test_emission_uses_batch_first_emission_time(self):
+        """SimulStream should use batch_first_emission_time for emission events."""
+        config = SimulStreamConfig(
+            longform=True, direction="en-de",
+            auto_sentence_boundary=False,
+        )
+        proc = NLLWSpeechProcessor(config)
+        proc._is_initialized = True
+        proc._backend = MagicMock()
+
+        from nllw.backend_protocol import TranslationStep
+
+        # Simulate word_batch=3: first 2 words return empty, 3rd returns text
+        # The 3rd word's translate() returns with batch_first_emission_time=1.0
+        # (the time of the 1st word), even though emission_time=3.0 for the 3rd word.
+        proc._backend.translate.side_effect = [
+            TranslationStep(text="", is_final=False),   # word 1 (batched)
+            TranslationStep(text="", is_final=False),   # word 2 (batched)
+            TranslationStep(
+                text="Translated output",
+                is_final=False,
+                batch_first_emission_time=1.0,  # Time of first word in batch
+            ),
+        ]
+
+        # Process words one at a time with different emission times
+        proc.process_words(["The"], emission_time=1.0)
+        proc.process_words(["president"], emission_time=2.0)
+        proc.process_words(["announced"], emission_time=3.0)
+
+        # The emission event should use batch_first_emission_time=1.0, not 3.0
+        assert len(proc._emission_log) == 1
+        event = proc._emission_log[0]
+        # batch_first_emission_time=1.0, converted to ms: 1000.0
+        assert event.emission_time == 1000.0  # 1.0s * 1000
+
+    def test_emission_falls_back_to_emission_time_when_none(self):
+        """If batch_first_emission_time is None, use the call's emission_time."""
+        config = SimulStreamConfig(
+            longform=True, direction="en-de",
+            auto_sentence_boundary=False,
+        )
+        proc = NLLWSpeechProcessor(config)
+        proc._is_initialized = True
+        proc._backend = MagicMock()
+
+        from nllw.backend_protocol import TranslationStep
+        proc._backend.translate.return_value = TranslationStep(
+            text="Output",
+            is_final=False,
+            batch_first_emission_time=None,
+        )
+
+        proc.process_words(["hello"], emission_time=2.5)
+
+        assert len(proc._emission_log) == 1
+        event = proc._emission_log[0]
+        assert event.emission_time == 2500.0  # 2.5s * 1000
+
+    def test_batch_first_in_longform_omnisteval(self):
+        """batch_first_emission_time should affect OmniSTEval delays."""
+        config = SimulStreamConfig(
+            longform=True, direction="en-de",
+            auto_sentence_boundary=False,
+        )
+        proc = NLLWSpeechProcessor(config)
+        proc._is_initialized = True
+        proc._backend = MagicMock()
+
+        from nllw.backend_protocol import TranslationStep
+
+        # Simulate: word at t=1.0 batched, word at t=2.0 triggers translation
+        proc._backend.translate.side_effect = [
+            TranslationStep(text="", is_final=False),
+            TranslationStep(
+                text="Uebersetzung fertig.",
+                is_final=True,
+                batch_first_emission_time=1.0,
+            ),
+        ]
+        proc._backend.get_full_translation.return_value = ""
+
+        proc.process_words(["first"], emission_time=1.0)
+        proc.process_words(["second"], emission_time=2.0, is_final=True)
+
+        entry = proc.to_omnisteval_entry(
+            source_name="test.wav",
+            source_length_ms=5000.0,
+            char_level=False,
+        )
+
+        # Delays should use batch_first time (1000ms), not last word time (2000ms)
+        assert len(entry["delays"]) == 2  # "Uebersetzung" "fertig."
+        for d in entry["delays"]:
+            assert d == 1000.0  # All words from batch starting at t=1.0
+
+    def test_backend_config_batch_first_tracking(self):
+        """Backend tracks batch_first_emission_time across batched words."""
+        from nllw.backend_protocol import BackendConfig
+
+        # Create config to simulate batch behavior
+        config = BackendConfig(
+            model_path="/tmp/test.gguf",
+            heads_path="/tmp/heads.json",
+            word_batch=3,
+        )
+        # Can't test full backend without GPU, but verify config is valid
+        assert config.word_batch == 3

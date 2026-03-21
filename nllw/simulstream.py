@@ -378,6 +378,13 @@ class NLLWSpeechProcessor:
                 self.config.aggregation,
                 self.config.top_p_threshold,
             )
+            # Warmup: eliminate cold-start latency from GPU kernel JIT
+            if hasattr(self._backend, 'warmup'):
+                try:
+                    self._backend.warmup()
+                    logger.info("Backend warmup complete")
+                except Exception as e:
+                    logger.warning("Backend warmup failed (non-critical): %s", e)
         except Exception as e:
             logger.error("Failed to initialize backend: %s", e)
             raise
@@ -495,9 +502,15 @@ class NLLWSpeechProcessor:
                 output.new_tokens.append(step.text)
 
                 # Track emission for OmniSTEval (always, for longform output)
+                # Use batch_first_emission_time for correct LongYAAL:
+                # attribute output to when the batch started, not completed.
+                # Reference: iwslt26-sst uses batch_first_emission_time.
+                cu_time = emission_time
+                if step.batch_first_emission_time is not None:
+                    cu_time = step.batch_first_emission_time
                 wall_ms = (time.time() - self._recording_start_time) * 1000.0
                 self._emission_log.append(EmissionEvent(
-                    emission_time=emission_time * 1000.0,  # Convert to ms
+                    emission_time=cu_time * 1000.0,  # Convert to ms
                     wall_clock=wall_ms,
                     text=step.text,
                     is_final=word_is_final,

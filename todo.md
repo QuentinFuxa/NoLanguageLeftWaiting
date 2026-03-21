@@ -653,6 +653,48 @@
   - Catches format violations early rather than at scoring time
 - [x] 920 unit tests (27 new, all passing)
 
+## DONE -- Iteration 22: YAAL Fix, Confidence Tracking, Warmup
+
+- [x] **batch_first_emission_time fix** (CRITICAL for competition YAAL):
+  - CU delays now attributed to FIRST word in batch, not last
+  - Reference: iwslt26-sst uses `batch_first_emission_time` "for correct LongYAAL"
+  - Added `batch_first_emission_time` field to `TranslationStep` dataclass
+  - AlignAtt backend tracks `_batch_first_emission_time` across batched words
+  - AlignAtt-LA backend also tracks batch_first_emission_time
+  - SimulStream wrapper uses `step.batch_first_emission_time` for EmissionEvent CU time
+  - Falls back to per-word emission_time when batch_first is None
+  - Expected YAAL improvement: ~(wb-1) * word_interval per batch
+- [x] **Per-step generation confidence tracking** (`avg_logprob` in TranslationStep):
+  - Computes average log-probability of generated tokens per translate() call
+  - Reuses perplexity tracking when enabled, falls back to direct logit computation
+  - Diagnostic: identifies low-confidence segments for future retry logic
+- [x] **Model warmup** (`warmup()` method on AlignAttBackend):
+  - Eliminates cold-start latency from GPU kernel JIT and memory allocation
+  - Decodes dummy prompt + generates one token to warm up all code paths
+  - Called automatically during SimulStream initialization
+  - Non-blocking: warmup failure logged as warning, doesn't prevent operation
+- [x] **Competition validator enhanced** (101 checks, up from 98):
+  - Validates batch_first_emission_time in TranslationStep
+  - Validates avg_logprob field
+  - Verifies emission uses batch_first_emission_time over per-word time
+- [x] **GPU experiment script** (`scripts/run_iteration22_experiments.py`):
+  - Phase 1: YAAL fix validation (compare new vs reference YAAL)
+  - Phase 2: Source-aware batching (function-word-aware, 100 sent)
+  - Phase 3: Perplexity adaptive border (threshold sweep, 100 sent)
+  - Phase 4: Adaptive top_p (confirm latency reduction, 100 sent)
+  - Phase 5: Competition OmniSTEval output (all 4 directions)
+  - Phase 6: Longform E2E (gold transcript -> OmniSTEval JSONL)
+  - Phase 7: Combined features sweep (all winning combinations)
+- [x] 928 unit tests (8 new, all passing)
+- [x] **SimulEvalEntry.validate() CJK fix** (from code review):
+  - Validator used `split()` word count for CJK, producing wrong unit count
+  - Now accepts both word-level AND char-level delays (auto-detected)
+  - Chinese/Japanese/Korean per-character delays validate correctly
+- [x] **Dockerfile: add simulstream dependency** (from code review):
+  - Docker entrypoint references `simulstream.server` but package wasn't installed
+  - Added `simulstream` to pip install list
+- [x] 930 unit tests (10 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
