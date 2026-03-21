@@ -560,6 +560,56 @@
   - All checks passing
 - [x] 859 unit tests (45 new, all passing)
 
+## DONE -- Iteration 20: Longform Mode, OmniSTEval Competition Output
+
+- [x] **Longform mode** (CRITICAL for IWSLT 2026 competition):
+  - OmniSTEval expects ONE output per recording, NOT per-sentence
+  - SoftSegmenter re-segments the output for COMET scoring
+  - Added `longform` flag to SimulStreamConfig (default=True)
+  - Added `auto_sentence_boundary` flag for target-side boundary detection
+  - `process_words()`: in longform mode, backend resets at sentence boundaries but output accumulates continuously
+  - Fixed double-reset bug: `translate(is_final=True)` already calls `_handle_segment_end()`, no need for separate `reset()` call
+  - `_recording_text` tracks full recording output (not just per-sentence)
+  - `_emission_log` tracks per-emission events with CU/CA timestamps
+  - `clear()` is the ONLY method that fully resets state between recordings
+- [x] **OmniSTEval longform output** (`to_omnisteval_entry()`):
+  - Generates ONE JSONL entry per recording matching OmniSTEval format
+  - Per-word delays (CU) and elapsed (CA) arrays in milliseconds
+  - Char-level mode for zh/ja/ko (per-character delays)
+  - Character-to-emission mapping from emission event log
+  - Validates against OmniSTEval's `ss-to-log.py` reference format
+- [x] **EmissionEvent dataclass**: tracks emission_time, wall_clock, text, is_final, status
+- [x] **Sentence boundary auto-detection** (`_detect_sentence_boundary()`):
+  - Detects sentence-ending punctuation per target language
+  - Chinese/Japanese: 。？！ | European: .?!
+  - Triggers backend reset without external is_final signal
+  - Handles trailing whitespace
+- [x] **Longform gold transcript processing** (`process_gold_transcript_longform()`):
+  - Competition format: processes entire recording's ASR transcript
+  - Produces single OmniSTEval JSONL entry
+  - Writes optional emission event log for debugging
+  - Handles source_length from audio duration or last emission time
+- [x] **CLI updates**:
+  - `--longform-input`: process gold ASR JSONL in longform mode
+  - `--omnisteval-output`: write OmniSTEval JSONL output
+  - `--source-name`, `--source-length`, `--char-level` options
+- [x] **IWSLT 2026 configs updated**: all 4 directions now include `longform: true` and `auto_sentence_boundary: true`
+- [x] **Competition validator extended**: 65+ checks now including longform mode, EmissionEvent, OmniSTEval output generation, delay monotonicity
+- [x] **Perplexity-based adaptive border** (Hibiki-inspired, novel for AlignAtt):
+  - Adjust border_distance per translate() call based on generation confidence
+  - `compute_token_perplexity()`: token-level perplexity from generation logits
+  - `compute_generation_perplexity()`: geometric mean of per-token perplexities
+  - `perplexity_border_adjustment()`: maps perplexity to bd delta (low ppl=bd-1, high ppl=bd+1)
+  - Tracked during generation loop, used for NEXT translate() call's effective_bd
+  - Unlike entropy veto (dead end that halts generation): adjusts READ/WRITE policy
+  - Targets YAAL latency: confident model = tighter border = faster output
+  - Config: `perplexity_adaptive_bd`, `perplexity_bd_low` (default 2.0), `perplexity_bd_high` (default 5.0)
+  - CLI: `--perplexity-adaptive-bd --perplexity-bd-low 2.0 --perplexity-bd-high 5.0`
+  - Sweep: `pplbd=0,1`, `ppllow=1.5,2.0,3.0`, `pplhigh=4.0,5.0,6.0`
+  - **Needs GPU testing on A40** to measure YAAL reduction vs quality impact
+- [x] **SOTA research completed**: Hibiki perplexity, ExPosST, Translation Heads ICLR 2026, DuoAttention, competition landscape analyzed
+- [x] 893 unit tests (34 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -651,6 +701,12 @@
 - [ ] **top_p_weighted variant test**: `python -m nllw.bench --aggregation top_p_weighted --border-distance 3 --word-batch 4 --lang en-zh --comet`
 - [ ] **top_p threshold per direction**: Best threshold from EN-ZH applied to EN-DE, EN-IT, CS-EN
 - [ ] **XCOMET-XL separate process scoring**: Save hypotheses to file, then score in new process (avoids OOM)
+
+### Perplexity adaptive border experiments (new in iteration 20)
+- [ ] **Perplexity adaptive bd basic test**: `python -m nllw.bench --perplexity-adaptive-bd --lang en-zh --comet --save` vs baseline
+- [ ] **Perplexity threshold sweep**: `python -m nllw.bench --sweep "pplbd=0,1 ppllow=1.5,2.0,3.0 pplhigh=4.0,5.0,6.0" --lang en-zh --comet --save`
+- [ ] **Perplexity + adaptive top_p combined**: `python -m nllw.bench --perplexity-adaptive-bd --adaptive-top-p --lang en-zh --comet --save`
+- [ ] **Perplexity per direction**: `python -m nllw.bench --perplexity-adaptive-bd --lang en-zh,en-de,en-it,cs-en --comet --save`
 
 ### Calibration experiments (new in iteration 13)
 - [ ] **Collect fusion traces on A40**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save --collect-traces traces_enzh.json`

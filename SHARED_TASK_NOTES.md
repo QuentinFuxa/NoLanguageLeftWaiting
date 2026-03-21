@@ -1,33 +1,32 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 19, 2026-03-21)
+## Current State (after Iteration 20, 2026-03-21)
 
-**30+ SimulMT modules (~14,500+ lines), 859 tests**
+**30+ SimulMT modules (~14,800 lines), 893 tests**
 **100-sentence CONFIRMED: COMET=0.894 EN-ZH, 0.881 EN-DE, 0.891 EN-IT, 0.879 CS-EN with top_p**
 
-### What happened in Iteration 19
-- **LongYAAL metric implemented** (IWSLT 2026 PRIMARY latency metric):
-  - `compute_longyaal()`: word-count domain (= YAAL longform)
-  - `compute_longyaal_ms()`: time-domain in milliseconds (for OmniSTEval output)
-  - `compute_stream_laal()`: IWSLT 2026 secondary latency metric
-  - All three added to `LatencyMetrics` dataclass, `EvalResult`, bench/eval output
-  - 13 new metric tests, all passing
-- **SimulStream wrapper hardened for competition**:
-  - `load_model(None)` reads from environment variables (Docker-friendly)
-  - `load_model(dict)` handles dict config from SimulStream server
-  - Auto-detect heads config from direction + model path
-  - `_update_direction()` centralizes direction switching logic
-  - Env vars: `NLLW_MODEL_PATH`, `NLLW_HEADS_DIR`, `NLLW_N_GPU_LAYERS`, `NLLW_DEFAULT_DIRECTION`
-  - 32 new SimulStream tests, all passing
-- **Dockerfile updated**:
-  - Fixed missing `requirements.txt` (now installs from pyproject.toml)
-  - Added NLLW env vars for auto-configuration
-  - Added health check (`python3 -c "from nllw.simulstream import ..."`)
-  - Documented multi-direction support via env vars
-- **Competition validator** (`scripts/validate_competition.py`):
-  - 50+ checks: imports, metrics, SimulStream protocol, OmniSTEval, configs, heads, corpus, Dockerfile
-  - ALL CHECKS PASSING
-- **859 tests** (45 new, all passing)
+### What happened in Iteration 20
+- **Longform mode implemented** (CRITICAL for competition):
+  - `longform=True` in SimulStreamConfig (default): accumulates output across sentence boundaries
+  - Backend resets at sentence boundaries (AlignAtt needs this) but output is one continuous stream
+  - `_recording_text` tracks full recording, `_emission_log` tracks per-event timestamps
+  - Fixed double-reset bug (translate + reset calling _handle_segment_end twice)
+  - `clear()` is only full reset (between recordings)
+- **OmniSTEval longform output** (`to_omnisteval_entry()`):
+  - ONE JSONL entry per recording: `{"source", "prediction", "delays", "elapsed", "source_length"}`
+  - Per-word or per-character delays matching `ss-to-log.py` reference format
+  - `process_gold_transcript_longform()` for competition-format evaluation
+- **Auto sentence boundary detection**: target-side punctuation (。？！.?!) triggers segment reset
+- **IWSLT configs updated**: all 4 directions now have `longform: true`
+- **Perplexity-based adaptive border** (Hibiki-inspired):
+  - Adjusts bd per translate() based on generation confidence (logit perplexity)
+  - Low ppl (confident) -> bd-1 (faster). High ppl (uncertain) -> bd+1 (safer)
+  - Targets YAAL latency. Unlike entropy veto (dead end), adjusts R/W policy not generation
+  - CLI: `--perplexity-adaptive-bd`, sweep: `pplbd=0,1 ppllow=1.5,2.0 pplhigh=4.0,5.0`
+  - **Needs GPU testing** to measure YAAL reduction
+- **SOTA research completed**: Hibiki, ExPosST, Translation Heads ICLR 2026, DuoAttention
+- **Competition validator**: 65+ checks, ALL PASSING
+- **893 tests** (34 new, all passing)
 
 ### 100-Sentence Verified Results (iteration 18, with tuned p_threshold + CI)
 
@@ -40,18 +39,22 @@
 
 ## What to do next
 
-### Priority 1: Competition Prep (IWSLT 2026, eval April 1-15, ~10 days)
-- **CRITICAL: Longform mode**: OmniSTEval produces ONE output per recording, NOT per-sentence. SoftSegmenter re-segments. Our SimulStream wrapper must NOT reset between sentences within a recording. Only `clear()` between recordings.
-- **Docker build + test**: Build image, run self-test with `--test` flag. Must support `linux/arm64`.
-- **SimulStream E2E**: Install simulstream package, test HTTP server integration
-- **OmniSTEval validation**: Run our output through OmniSTEval locally, verify LongYAAL + COMET scores match
-- **Multi-direction test**: Verify direction switching (set_source_language + set_target_language) works E2E
+### Priority 1: Competition E2E Testing (IWSLT 2026, eval April 1-15, ~10 days)
+- **Docker build + test**: Build image, run self-test. Must support linux/amd64 (H100).
+- **Longform E2E on A40**: Run `process_gold_transcript_longform()` on a real recording from iwslt26-sst
+  - Use gold JSONL from `iwslt26-sst/inputs/en/acl6060.ts/gold-jsonl/`
+  - Verify output matches OmniSTEval format via `omnisteval longform`
+  - Compare LongYAAL + COMET with reference system scores
+- **SimulStream HTTP server E2E**: Install simulstream package, test HTTP server integration
+  - `simulstream.server --speech-processor nllw.simulstream:NLLWSpeechProcessor`
+  - Verify direction switching, clear() between recordings, longform accumulation
+- **Multi-direction longform test**: Verify all 4 directions work in longform mode
 - **Decision**: Enable `adaptive_top_p` for competition? Phase 1 shows 6-12% latency reduction for <0.002 COMET cost
 
-### Priority 2: Run Remaining A40 Experiments
-- Collect iteration 18 A40 results (adaptive top_p validation, XCOMET-XL subprocess, variance)
-- If adaptive_top_p confirmed: update IWSLT configs to enable it
+### Priority 2: Quality Improvements
+- **Context injection for longform**: In longform mode, context_sentences could help since segments are consecutive. Test context=1 in longform (even though it hurts HY-MT in isolation, longform continuity might change the equation)
 - Run competition-format test (SimulStream + OmniSTEval) on A40
+- If adaptive_top_p confirmed: update IWSLT configs to enable it
 
 ### Priority 3: Research Ideas (if time permits)
 - **Syntax-aware chunking (SASST)**: Dependency-based word batching for better segmentation
@@ -72,5 +75,8 @@ Use: `rsync -avz` (without --delete) to preserve files.
 - **Best known**: EN-ZH COMET=0.894, EN-DE 0.881, EN-IT 0.891 (>offline!), CS-EN 0.879
 - **All directions at 99.7-100.2% of offline quality**
 - **Model path on A40**: `/home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
-- **Competition validator**: `python scripts/validate_competition.py` (all 50+ checks pass)
-- **New in iter 19**: LongYAAL metrics, hardened SimulStream, Docker env vars, 859 tests
+- **Competition validator**: `python scripts/validate_competition.py` (65+ checks pass)
+- **New in iter 20**: Longform mode, OmniSTEval output, perplexity adaptive border, 893 tests
+- **OmniSTEval format**: ONE JSONL line per recording with per-word delays in ms
+  - Reference converter: `iwslt26-sst/evaluation/ss-to-log.py`
+  - Run: `omnisteval longform --speech_segmentation ... --ref_sentences_file ... --hypothesis_file out.log`

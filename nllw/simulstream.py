@@ -74,6 +74,20 @@ class IncrementalOutput:
         return not self.new_string and not self.deleted_string
 
 
+@dataclass
+class EmissionEvent:
+    """A single emission event in the longform output stream.
+
+    Used to build OmniSTEval JSONL output for competition evaluation.
+    Records per-word emission times for LongYAAL computation.
+    """
+    emission_time: float     # ASR emission time of triggering source word (ms)
+    wall_clock: float        # Wall-clock time of translation output (ms)
+    text: str                # Emitted target text
+    is_final: bool = False   # True if this is end of a sentence segment
+    status: str = "COMPLETE" # COMPLETE or PARTIAL
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
@@ -100,6 +114,10 @@ class SimulStreamConfig:
 
     # All BackendConfig params are forwarded
     extra_backend_params: Dict[str, Any] = field(default_factory=dict)
+
+    # Longform mode (IWSLT 2026 competition format)
+    longform: bool = True           # Accumulate output across sentences, only clear() between recordings
+    auto_sentence_boundary: bool = True  # Auto-detect sentence boundaries from target output
 
     # Audio / ASR
     sample_rate: int = 16000
@@ -224,6 +242,14 @@ class NLLWSpeechProcessor:
         NLLW_DEFAULT_DIRECTION: Default language direction (default: en-zh)
     """
 
+    # Sentence-ending punctuation for auto boundary detection (by target language)
+    _SENTENCE_END_PUNCT = {
+        "zh": set("。？！"),
+        "ja": set("。？！"),
+        "ko": set("。？！"),
+        "default": set(".?!"),
+    }
+
     def __init__(self, config: SimulStreamConfig):
         self.config = config
         self._backend = None
@@ -238,6 +264,12 @@ class NLLWSpeechProcessor:
         self._source_lang = config.direction.split("-")[0]
         self._target_lang = config.direction.split("-")[1] if "-" in config.direction else "zh"
         self._word_emission_times: List[float] = []  # Track emission times for LongYAAL
+
+        # Longform mode: emission tracking for OmniSTEval
+        self._emission_log: List[EmissionEvent] = []  # Per-event log for the current recording
+        self._recording_start_time: float = 0.0       # Wall-clock start of current recording
+        self._recording_text: str = ""                 # Accumulated text for the whole recording
+        self._n_sentences_in_recording: int = 0        # Sentence count for context tracking
 
     @classmethod
     def load_model(cls, config=None) -> "NLLWSpeechProcessor":
@@ -422,6 +454,16 @@ class NLLWSpeechProcessor:
         This is the core method that feeds words to the MT backend.
         Can be called directly for testing without audio/ASR.
 
+        In longform mode (default for competition):
+            - is_final marks sentence boundaries, NOT recording boundaries
+            - Backend resets at sentence boundaries (AlignAtt needs this)
+            - Output accumulates across sentences for the whole recording
+            - Call end_of_stream() at recording end, clear() between recordings
+
+        In sentence mode (longform=False):
+            - is_final marks both sentence and recording boundaries
+            - Backend resets and output is per-sentence
+
         Args:
             words: List of new source words to process
             is_final: True if this is the last word of a sentence/segment
@@ -432,6 +474,9 @@ class NLLWSpeechProcessor:
         """
         if not self._is_initialized:
             self._initialize()
+
+        if not self._recording_start_time:
+            self._recording_start_time = time.time()
 
         output = IncrementalOutput()
 
@@ -447,16 +492,74 @@ class NLLWSpeechProcessor:
                 output.new_string += step.text
                 output.new_tokens.append(step.text)
 
+                # Track emission for OmniSTEval (always, for longform output)
+                wall_ms = (time.time() - self._recording_start_time) * 1000.0
+                self._emission_log.append(EmissionEvent(
+                    emission_time=emission_time * 1000.0,  # Convert to ms
+                    wall_clock=wall_ms,
+                    text=step.text,
+                    is_final=word_is_final,
+                ))
+
+                # Always accumulate recording text (for longform OmniSTEval)
+                self._recording_text += step.text
+
             if word_is_final:
+                # Sentence boundary: reset backend but keep accumulating
                 self._committed_text += output.new_string
+                self._n_sentences_in_recording += 1
+
+                # Backend already handled segment end in translate(is_final=True)
+                # which calls _handle_segment_end(). Don't call reset() again
+                # since that would double-reset (clearing already-empty state).
+
+                if not self.config.longform:
+                    # Sentence mode: explicit reset (backward compat)
+                    self._backend.reset()
+
+        # Auto sentence boundary detection: if longform + auto + no explicit is_final,
+        # check if the generated text ends with sentence-ending punctuation
+        if (self.config.longform and self.config.auto_sentence_boundary
+                and not is_final and output.new_string):
+            if self._detect_sentence_boundary(output.new_string):
+                logger.debug("Auto-detected sentence boundary in: %s", output.new_string[-30:])
+                # Force the backend to treat this as a sentence end
                 self._backend.reset()
+                self._committed_text += output.new_string
+                self._n_sentences_in_recording += 1
 
         return output
+
+    def _detect_sentence_boundary(self, text: str) -> bool:
+        """Detect if text ends with sentence-ending punctuation.
+
+        Used in longform mode for auto sentence boundary detection when
+        the ASR doesn't provide is_final signals.
+
+        Args:
+            text: Generated target text to check
+
+        Returns:
+            True if text ends with sentence-ending punctuation
+        """
+        if not text:
+            return False
+
+        text = text.rstrip()
+        if not text:
+            return False
+
+        punct_set = self._SENTENCE_END_PUNCT.get(
+            self._target_lang,
+            self._SENTENCE_END_PUNCT["default"]
+        )
+        return text[-1] in punct_set
 
     def end_of_stream(self) -> IncrementalOutput:
         """Called when audio stream ends. Flush remaining output.
 
-        Sends is_final=True for any buffered words, then resets.
+        In longform mode: flushes the final sentence of the recording.
+        Call clear() after this to prepare for the next recording.
 
         Returns:
             IncrementalOutput with final translation text
@@ -479,7 +582,18 @@ class NLLWSpeechProcessor:
             output.new_string = remaining[len(self._prev_text):]
             if output.new_string:
                 output.new_tokens.append(output.new_string)
+                # Track final emission
+                if self._recording_start_time:
+                    wall_ms = (time.time() - self._recording_start_time) * 1000.0
+                    self._emission_log.append(EmissionEvent(
+                        emission_time=wall_ms,  # Use wall-clock as CU at end
+                        wall_clock=wall_ms,
+                        text=output.new_string,
+                        is_final=True,
+                    ))
 
+        if output.new_string:
+            self._recording_text += output.new_string
         self._backend.reset()
         return output
 
@@ -561,7 +675,11 @@ class NLLWSpeechProcessor:
         return self.config.speech_chunk_size / self.config.sample_rate
 
     def clear(self):
-        """Reset state between talks (SimulStream protocol)."""
+        """Reset state between recordings (SimulStream protocol).
+
+        In longform mode, this is the ONLY method that fully resets state.
+        Call after end_of_stream() when moving to a new recording.
+        """
         if self._backend:
             self._backend.reset()
 
@@ -573,6 +691,12 @@ class NLLWSpeechProcessor:
         self._n_chunks_processed = 0
         self._total_audio_seconds = 0.0
         self._word_emission_times = []
+
+        # Reset longform recording state
+        self._emission_log = []
+        self._recording_start_time = 0.0
+        self._recording_text = ""
+        self._n_sentences_in_recording = 0
 
     def close(self):
         """Free all resources."""
@@ -603,12 +727,134 @@ class NLLWSpeechProcessor:
             "chunks_processed": self._n_chunks_processed,
             "total_audio_seconds": self._total_audio_seconds,
             "committed_text": self._committed_text,
+            "recording_text": self._recording_text,
+            "n_sentences_in_recording": self._n_sentences_in_recording,
+            "n_emission_events": len(self._emission_log),
             "direction": self.config.direction,
             "backend_type": self.config.backend_type,
             "border_distance": self.config.border_distance,
             "word_batch": self.config.word_batch,
             "aggregation": self.config.aggregation,
             "top_p_threshold": self.config.top_p_threshold,
+            "longform": self.config.longform,
+        }
+
+    @property
+    def emission_log(self) -> List[EmissionEvent]:
+        """Get the emission event log for the current recording."""
+        return list(self._emission_log)
+
+    def get_recording_text(self) -> str:
+        """Get the full accumulated text for the current recording."""
+        return self._recording_text
+
+    def to_omnisteval_entry(
+        self,
+        source_name: str = "recording.wav",
+        source_length_ms: Optional[float] = None,
+        char_level: bool = False,
+    ) -> Dict[str, Any]:
+        """Convert the current recording's output to OmniSTEval format.
+
+        Produces ONE JSONL entry per recording, matching OmniSTEval's
+        longform evaluation format. This is the PRIMARY competition format.
+
+        The entry format:
+            {"source": "recording.wav", "prediction": "...",
+             "delays": [...], "elapsed": [...], "source_length": ...}
+
+        delays[i] = CU emission time (ms) for the i-th word/char in prediction
+        elapsed[i] = CA emission time (ms) for the i-th word/char in prediction
+
+        Args:
+            source_name: Source audio filename
+            source_length_ms: Total source audio duration in ms.
+                If None, uses wall-clock recording time.
+            char_level: If True, produce per-character delays (for zh/ja/ko).
+                If False, produce per-word delays.
+
+        Returns:
+            Dict ready to be serialized as JSONL
+        """
+        prediction = self._recording_text.strip()
+        if not prediction:
+            return {
+                "source": source_name,
+                "prediction": "",
+                "delays": [],
+                "elapsed": [],
+                "source_length": source_length_ms or 0.0,
+            }
+
+        # Build per-word (or per-char) delay arrays from emission log
+        if char_level:
+            units = list(prediction)
+        else:
+            units = prediction.split()
+
+        n_units = len(units)
+
+        # Walk through emission events and assign delays to prediction units
+        delays_cu: List[float] = []
+        delays_ca: List[float] = []
+
+        # Build a mapping: for each character position in prediction,
+        # find the emission event that produced it
+        char_to_cu: List[float] = []
+        char_to_ca: List[float] = []
+        char_pos = 0
+
+        for event in self._emission_log:
+            text = event.text
+            for _ in text:
+                if char_pos < len(prediction):
+                    char_to_cu.append(event.emission_time)
+                    char_to_ca.append(event.wall_clock)
+                    char_pos += 1
+
+        # Pad if emission log doesn't cover all chars (shouldn't happen)
+        last_cu = char_to_cu[-1] if char_to_cu else 0.0
+        last_ca = char_to_ca[-1] if char_to_ca else 0.0
+        while len(char_to_cu) < len(prediction):
+            char_to_cu.append(last_cu)
+            char_to_ca.append(last_ca)
+
+        if char_level:
+            delays_cu = [round(t, 1) for t in char_to_cu[:n_units]]
+            delays_ca = [round(t, 1) for t in char_to_ca[:n_units]]
+        else:
+            # Per-word: use the delay of the LAST character of each word
+            pos = 0
+            for word in units:
+                # Find where this word ends in the prediction string
+                word_start = prediction.find(word, pos)
+                if word_start < 0:
+                    # Fallback: use current position
+                    word_start = pos
+                word_end = word_start + len(word)
+                # Use delay of last char of this word
+                idx = min(word_end - 1, len(char_to_cu) - 1)
+                if idx >= 0:
+                    delays_cu.append(round(char_to_cu[idx], 1))
+                    delays_ca.append(round(char_to_ca[idx], 1))
+                else:
+                    delays_cu.append(0.0)
+                    delays_ca.append(0.0)
+                pos = word_end
+
+        # Source length: use provided value or wall-clock recording time
+        if source_length_ms is None:
+            if self._recording_start_time:
+                source_length_ms = (time.time() - self._recording_start_time) * 1000.0
+            else:
+                source_length_ms = 0.0
+
+        return {
+            "source": source_name,
+            "prediction": prediction,
+            "delays": delays_cu,
+            "elapsed": delays_ca,
+            "source_length": round(source_length_ms, 1),
         }
 
 
@@ -700,6 +946,101 @@ def process_gold_transcript(
     return entries
 
 
+def process_gold_transcript_longform(
+    processor: NLLWSpeechProcessor,
+    input_path: str,
+    source_name: str = "recording.wav",
+    source_length_s: Optional[float] = None,
+    output_path: Optional[str] = None,
+    compute_aware: bool = False,
+    char_level: bool = False,
+) -> Dict[str, Any]:
+    """Process a gold ASR transcript in longform mode (one recording).
+
+    This is the COMPETITION FORMAT for IWSLT 2026. Produces one
+    OmniSTEval JSONL entry per recording, matching what `omnisteval longform`
+    expects.
+
+    Input JSONL: same as process_gold_transcript()
+    Output: Single OmniSTEval entry with per-word delays
+
+    Args:
+        processor: Initialized NLLWSpeechProcessor (longform mode)
+        input_path: Path to gold ASR JSONL (one recording's words)
+        source_name: Source audio filename for OmniSTEval
+        source_length_s: Total source audio duration in seconds.
+            If None, computed from last emission_time.
+        output_path: Path for emission event log JSONL (optional)
+        compute_aware: If True, use wall-clock for CA delays
+        char_level: If True, per-character delays (for zh/ja/ko)
+
+    Returns:
+        OmniSTEval entry dict: {"source", "prediction", "delays", "elapsed", "source_length"}
+    """
+    with open(input_path) as f:
+        asr_words = [json.loads(line) for line in f if line.strip()]
+
+    # Process all words through the processor
+    processor.clear()  # Start fresh for this recording
+    last_emission_time = 0.0
+    outf = open(output_path, "w") if output_path else None
+
+    try:
+        for word_idx, asr_word in enumerate(asr_words):
+            is_final = asr_word.get("is_final", False)
+            is_last = (word_idx == len(asr_words) - 1)
+            # In longform: pass is_final through for sentence boundaries
+            # The last word of the recording also gets is_final
+            word_is_final = is_final or is_last
+            emission_time = asr_word.get("emission_time", 0.0)
+            last_emission_time = max(last_emission_time, emission_time)
+
+            output = processor.process_words(
+                [asr_word["text"]],
+                is_final=word_is_final,
+                emission_time=emission_time,
+            )
+
+            # Write emission event log (for debugging / SimulStream compat)
+            if outf and output.new_string:
+                entry = {
+                    "emission_time": emission_time,
+                    "text": output.new_string,
+                    "status": "COMPLETE",
+                    "is_final": word_is_final,
+                }
+                outf.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                outf.flush()
+
+        # Flush remaining output
+        final_output = processor.end_of_stream()
+        if outf and not final_output.is_empty:
+            entry = {
+                "emission_time": last_emission_time,
+                "text": final_output.new_string,
+                "status": "COMPLETE",
+                "is_final": True,
+            }
+            outf.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            outf.flush()
+
+    finally:
+        if outf:
+            outf.close()
+
+    # Compute source length
+    source_length_ms = source_length_s * 1000.0 if source_length_s else last_emission_time * 1000.0
+
+    # Generate OmniSTEval entry
+    omnisteval_entry = processor.to_omnisteval_entry(
+        source_name=source_name,
+        source_length_ms=source_length_ms,
+        char_level=char_level,
+    )
+
+    return omnisteval_entry
+
+
 # ---------------------------------------------------------------------------
 # Text-mode evaluation: process plain text sentences
 # ---------------------------------------------------------------------------
@@ -774,11 +1115,20 @@ def main():
     # Processing mode
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--input", help="Gold ASR JSONL input file")
+    mode.add_argument("--longform-input", help="Gold ASR JSONL in longform mode (competition format)")
     mode.add_argument("--test", action="store_true",
                       help="Run self-test with sample sentences")
     mode.add_argument("--text", help="Translate a single sentence")
 
     parser.add_argument("--output", default=None, help="Output JSONL file")
+    parser.add_argument("--omnisteval-output", default=None,
+                        help="OmniSTEval JSONL output (longform mode)")
+    parser.add_argument("--source-name", default="recording.wav",
+                        help="Source audio filename for OmniSTEval")
+    parser.add_argument("--source-length", type=float, default=None,
+                        help="Source audio length in seconds")
+    parser.add_argument("--char-level", action="store_true",
+                        help="Char-level delays for zh/ja/ko (default: word-level)")
     parser.add_argument("--compute-aware", action="store_true")
 
     args = parser.parse_args()
@@ -806,6 +1156,37 @@ def main():
                 processor, args.input, args.output, args.compute_aware
             )
             print(f"Processed {len(entries)} entries", file=sys.stderr)
+
+        elif args.longform_input:
+            # Competition format: longform processing
+            config.longform = True
+            omnisteval_entry = process_gold_transcript_longform(
+                processor, args.longform_input,
+                source_name=args.source_name,
+                source_length_s=args.source_length,
+                output_path=args.output,
+                compute_aware=args.compute_aware,
+                char_level=args.char_level,
+            )
+
+            # Write OmniSTEval JSONL
+            out = args.omnisteval_output or args.output
+            if out:
+                with open(out, "w") as f:
+                    json.dump(omnisteval_entry, f, ensure_ascii=False)
+                    f.write("\n")
+                print(f"OmniSTEval entry written: {out}", file=sys.stderr)
+            else:
+                json.dump(omnisteval_entry, sys.stdout, ensure_ascii=False)
+                sys.stdout.write("\n")
+
+            n_words = len(omnisteval_entry["prediction"].split())
+            print(
+                f"Longform: {n_words} words, "
+                f"{processor._n_sentences_in_recording} sentences, "
+                f"{len(processor._emission_log)} emissions",
+                file=sys.stderr,
+            )
 
         elif args.test:
             # Self-test with sample sentences

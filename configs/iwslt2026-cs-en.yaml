@@ -22,6 +22,10 @@ top_k_heads: 10
 # Repetition halt: not tested for CS-EN, disabled by default
 # repetition_max_repeats: 2
 
+# Longform mode (competition format: one output per recording)
+longform: true
+auto_sentence_boundary: true
+
 # SimulStream settings
 sample_rate: 16000
 min_start_seconds: 0.5

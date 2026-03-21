@@ -1,6 +1,8 @@
 """Tests for SimulStream wrapper -- IWSLT 2026 competition readiness."""
 
 import os
+import json
+import tempfile
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -8,7 +10,9 @@ from nllw.simulstream import (
     NLLWSpeechProcessor,
     SimulStreamConfig,
     IncrementalOutput,
+    EmissionEvent,
     DIRECTION_DEFAULTS,
+    process_gold_transcript_longform,
 )
 
 
@@ -299,3 +303,351 @@ class TestTokensToString:
         config = SimulStreamConfig()
         proc = NLLWSpeechProcessor(config)
         assert proc.tokens_to_string([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Longform mode tests (CRITICAL for IWSLT 2026 competition)
+# ---------------------------------------------------------------------------
+
+class TestEmissionEvent:
+    """Test EmissionEvent dataclass."""
+
+    def test_basic_event(self):
+        event = EmissionEvent(
+            emission_time=1500.0, wall_clock=1600.0,
+            text="Hello", is_final=False
+        )
+        assert event.emission_time == 1500.0
+        assert event.text == "Hello"
+        assert event.status == "COMPLETE"
+
+    def test_final_event(self):
+        event = EmissionEvent(
+            emission_time=3000.0, wall_clock=3200.0,
+            text="world.", is_final=True
+        )
+        assert event.is_final
+
+
+class TestLongformConfig:
+    """Test longform configuration."""
+
+    def test_longform_default_true(self):
+        config = SimulStreamConfig()
+        assert config.longform is True
+
+    def test_auto_sentence_boundary_default_true(self):
+        config = SimulStreamConfig()
+        assert config.auto_sentence_boundary is True
+
+    def test_longform_disabled(self):
+        config = SimulStreamConfig(longform=False)
+        assert config.longform is False
+
+
+class TestLongformState:
+    """Test longform state tracking in processor."""
+
+    def test_init_longform_state(self):
+        config = SimulStreamConfig()
+        proc = NLLWSpeechProcessor(config)
+        assert proc._emission_log == []
+        assert proc._recording_text == ""
+        assert proc._n_sentences_in_recording == 0
+
+    def test_clear_resets_longform_state(self):
+        config = SimulStreamConfig()
+        proc = NLLWSpeechProcessor(config)
+        proc._emission_log = [EmissionEvent(1.0, 2.0, "test")]
+        proc._recording_text = "accumulated text"
+        proc._n_sentences_in_recording = 3
+        proc._recording_start_time = 100.0
+
+        proc.clear()
+        assert proc._emission_log == []
+        assert proc._recording_text == ""
+        assert proc._n_sentences_in_recording == 0
+        assert proc._recording_start_time == 0.0
+
+
+class TestSentenceBoundaryDetection:
+    """Test auto sentence boundary detection."""
+
+    def test_detect_period_english(self):
+        config = SimulStreamConfig(direction="en-de")
+        proc = NLLWSpeechProcessor(config)
+        assert proc._detect_sentence_boundary("Hello world.")
+        assert proc._detect_sentence_boundary("What is this?")
+        assert proc._detect_sentence_boundary("Amazing!")
+
+    def test_no_boundary_mid_sentence(self):
+        config = SimulStreamConfig(direction="en-de")
+        proc = NLLWSpeechProcessor(config)
+        assert not proc._detect_sentence_boundary("Hello world")
+        assert not proc._detect_sentence_boundary("The president")
+
+    def test_detect_chinese_punctuation(self):
+        config = SimulStreamConfig(direction="en-zh")
+        proc = NLLWSpeechProcessor(config)
+        assert proc._detect_sentence_boundary("\u7f8e\u56fd\u603b\u7edf\u3002")  # ends with 。
+        assert proc._detect_sentence_boundary("\u662f\u4ec0\u4e48\uff1f")  # ends with ？
+        assert proc._detect_sentence_boundary("\u592a\u597d\u4e86\uff01")  # ends with ！
+
+    def test_no_boundary_empty(self):
+        config = SimulStreamConfig(direction="en-de")
+        proc = NLLWSpeechProcessor(config)
+        assert not proc._detect_sentence_boundary("")
+        assert not proc._detect_sentence_boundary("   ")
+
+    def test_trailing_whitespace_handled(self):
+        config = SimulStreamConfig(direction="en-de")
+        proc = NLLWSpeechProcessor(config)
+        assert proc._detect_sentence_boundary("Hello world.  ")
+
+
+class TestLongformProcessing:
+    """Test longform word processing with mock backend."""
+
+    def _make_mock_processor(self, longform=True, direction="en-zh"):
+        config = SimulStreamConfig(
+            longform=longform, direction=direction,
+            auto_sentence_boundary=False,  # Disable auto for predictable tests
+        )
+        proc = NLLWSpeechProcessor(config)
+        proc._is_initialized = True
+        proc._backend = MagicMock()
+        return proc
+
+    def test_longform_accumulates_across_sentences(self):
+        """In longform mode, recording_text accumulates across sentence boundaries."""
+        proc = self._make_mock_processor(longform=True)
+
+        # Mock backend translate to return text
+        from nllw.backend_protocol import TranslationStep
+        proc._backend.translate.return_value = TranslationStep(
+            text="Translated. ", is_final=False
+        )
+
+        # Sentence 1
+        proc.process_words(["Hello"], is_final=False)
+        proc._backend.translate.return_value = TranslationStep(
+            text="End.", is_final=True
+        )
+        proc.process_words(["world"], is_final=True)
+
+        assert proc._n_sentences_in_recording == 1
+        assert "End." in proc._recording_text
+
+        # Sentence 2
+        proc._backend.translate.return_value = TranslationStep(
+            text="More text.", is_final=True
+        )
+        proc.process_words(["more"], is_final=True)
+
+        assert proc._n_sentences_in_recording == 2
+        # Recording text should have both sentences
+        assert "End." in proc._recording_text
+        assert "More text." in proc._recording_text
+
+    def test_longform_no_double_reset(self):
+        """In longform mode, reset() is NOT called after translate(is_final=True)."""
+        proc = self._make_mock_processor(longform=True)
+
+        from nllw.backend_protocol import TranslationStep
+        proc._backend.translate.return_value = TranslationStep(
+            text="Output.", is_final=True
+        )
+
+        proc.process_words(["word"], is_final=True)
+
+        # Backend.translate was called with is_final=True (triggers internal segment end)
+        proc._backend.translate.assert_called_with(
+            "word", is_final=True, emission_time=0.0
+        )
+        # In longform mode, reset() should NOT be called (backend handles it internally)
+        proc._backend.reset.assert_not_called()
+
+    def test_sentence_mode_calls_reset(self):
+        """In sentence mode (longform=False), reset() IS called after is_final."""
+        proc = self._make_mock_processor(longform=False)
+
+        from nllw.backend_protocol import TranslationStep
+        proc._backend.translate.return_value = TranslationStep(
+            text="Output.", is_final=True
+        )
+
+        proc.process_words(["word"], is_final=True)
+
+        # In sentence mode, reset() should be called
+        proc._backend.reset.assert_called_once()
+
+    def test_emission_log_tracks_events(self):
+        """Emission events are logged for OmniSTEval output."""
+        proc = self._make_mock_processor(longform=True)
+
+        from nllw.backend_protocol import TranslationStep
+        proc._backend.translate.return_value = TranslationStep(
+            text="Hello ", is_final=False
+        )
+
+        proc.process_words(["source"], emission_time=1.5)
+
+        assert len(proc._emission_log) == 1
+        assert proc._emission_log[0].text == "Hello "
+        assert proc._emission_log[0].emission_time == 1500.0  # Converted to ms
+
+    def test_emission_log_property(self):
+        """emission_log property returns a copy."""
+        proc = self._make_mock_processor(longform=True)
+        proc._emission_log.append(EmissionEvent(1.0, 2.0, "test"))
+
+        log = proc.emission_log
+        assert len(log) == 1
+        # Modifying the copy doesn't affect the original
+        log.append(EmissionEvent(3.0, 4.0, "extra"))
+        assert len(proc._emission_log) == 1
+
+
+class TestOmniSTEvalOutput:
+    """Test OmniSTEval longform output generation."""
+
+    def _make_proc_with_emissions(self):
+        config = SimulStreamConfig(direction="en-de", longform=True)
+        proc = NLLWSpeechProcessor(config)
+        proc._recording_start_time = 1000.0  # Some fixed start
+        proc._recording_text = "Hallo Welt. Guten Tag."
+        proc._emission_log = [
+            EmissionEvent(emission_time=500.0, wall_clock=520.0,
+                          text="Hallo ", is_final=False),
+            EmissionEvent(emission_time=800.0, wall_clock=850.0,
+                          text="Welt. ", is_final=True),
+            EmissionEvent(emission_time=1200.0, wall_clock=1250.0,
+                          text="Guten ", is_final=False),
+            EmissionEvent(emission_time=1500.0, wall_clock=1580.0,
+                          text="Tag.", is_final=True),
+        ]
+        return proc
+
+    def test_omnisteval_entry_structure(self):
+        proc = self._make_proc_with_emissions()
+        entry = proc.to_omnisteval_entry(
+            source_name="test.wav",
+            source_length_ms=5000.0,
+        )
+
+        assert entry["source"] == "test.wav"
+        assert entry["prediction"] == "Hallo Welt. Guten Tag."
+        assert entry["source_length"] == 5000.0
+        assert len(entry["delays"]) == 4  # 4 words
+        assert len(entry["elapsed"]) == 4
+
+    def test_omnisteval_delays_per_word(self):
+        """Per-word delays map to the last char of each word."""
+        proc = self._make_proc_with_emissions()
+        entry = proc.to_omnisteval_entry(
+            source_name="test.wav",
+            source_length_ms=5000.0,
+        )
+
+        delays = entry["delays"]
+        # "Hallo" -> emission_time 500.0
+        # "Welt." -> emission_time 800.0
+        # "Guten" -> emission_time 1200.0
+        # "Tag." -> emission_time 1500.0
+        assert delays[0] == 500.0
+        assert delays[1] == 800.0
+        assert delays[2] == 1200.0
+        assert delays[3] == 1500.0
+
+    def test_omnisteval_char_level(self):
+        """Char-level delays produce one delay per character."""
+        proc = self._make_proc_with_emissions()
+        entry = proc.to_omnisteval_entry(
+            source_name="test.wav",
+            source_length_ms=5000.0,
+            char_level=True,
+        )
+
+        prediction = "Hallo Welt. Guten Tag."
+        assert len(entry["delays"]) == len(prediction)
+
+    def test_omnisteval_empty_prediction(self):
+        config = SimulStreamConfig(longform=True)
+        proc = NLLWSpeechProcessor(config)
+        proc._recording_text = ""
+
+        entry = proc.to_omnisteval_entry(source_length_ms=1000.0)
+        assert entry["prediction"] == ""
+        assert entry["delays"] == []
+        assert entry["elapsed"] == []
+
+    def test_stats_includes_longform_info(self):
+        config = SimulStreamConfig(longform=True)
+        proc = NLLWSpeechProcessor(config)
+        proc._recording_text = "some text"
+        proc._n_sentences_in_recording = 2
+        proc._emission_log = [EmissionEvent(1.0, 2.0, "a")] * 3
+
+        stats = proc.stats
+        assert stats["longform"] is True
+        assert stats["recording_text"] == "some text"
+        assert stats["n_sentences_in_recording"] == 2
+        assert stats["n_emission_events"] == 3
+
+
+class TestLongformGoldTranscript:
+    """Test process_gold_transcript_longform() -- competition format."""
+
+    def test_longform_processes_multi_sentence(self):
+        """Multi-sentence gold transcript produces one OmniSTEval entry."""
+        # Create a temporary gold transcript JSONL
+        words = [
+            {"text": "The", "emission_time": 0.5, "is_final": False},
+            {"text": "president", "emission_time": 0.8, "is_final": False},
+            {"text": "spoke", "emission_time": 1.1, "is_final": True},
+            {"text": "New", "emission_time": 2.0, "is_final": False},
+            {"text": "reforms", "emission_time": 2.5, "is_final": True},
+        ]
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            for w in words:
+                f.write(json.dumps(w) + "\n")
+            input_path = f.name
+
+        try:
+            # Create processor with mock backend
+            config = SimulStreamConfig(longform=True, auto_sentence_boundary=False)
+            proc = NLLWSpeechProcessor(config)
+            proc._is_initialized = True
+
+            from nllw.backend_protocol import TranslationStep
+            mock_backend = MagicMock()
+            # Return translations for each word
+            mock_backend.translate.side_effect = [
+                TranslationStep(text="", is_final=False),
+                TranslationStep(text="Le president ", is_final=False),
+                TranslationStep(text="a parle.", is_final=True),
+                TranslationStep(text="", is_final=False),
+                TranslationStep(text="Nouvelles reformes.", is_final=True),
+            ]
+            mock_backend.get_full_translation.return_value = ""
+            mock_backend.reset.return_value = None
+            proc._backend = mock_backend
+
+            entry = process_gold_transcript_longform(
+                proc, input_path,
+                source_name="talk_1.wav",
+                source_length_s=3.0,
+            )
+
+            assert entry["source"] == "talk_1.wav"
+            assert entry["source_length"] == 3000.0  # 3s -> 3000ms
+            assert "Le president" in entry["prediction"]
+            assert "reformes" in entry["prediction"]
+            # Should have delays for each word
+            n_words = len(entry["prediction"].split())
+            assert len(entry["delays"]) == n_words
+            assert len(entry["elapsed"]) == n_words
+
+        finally:
+            os.unlink(input_path)

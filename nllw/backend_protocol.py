@@ -168,6 +168,21 @@ class BackendConfig:
     # Fusion decision threshold: fusion_score >= threshold -> WRITE (border hit).
     # 0.0 = balanced, positive = more conservative (fewer WRITE), negative = aggressive.
     fusion_threshold: float = 0.0
+    # Perplexity-based adaptive border (Hibiki-inspired, novel for AlignAtt):
+    # Adjust border_distance per translate() call based on generation confidence.
+    # After each word batch, compute average perplexity from generation logits.
+    # Low perplexity = model confident = tighten border (bd-1 or bd-2) for
+    # lower latency. High perplexity = model uncertain = widen border (bd+1)
+    # for better quality. Unlike entropy veto (which halts generation, a dead
+    # end), this adjusts the READ/WRITE policy between steps.
+    # False=disabled, True=enabled.
+    perplexity_adaptive_bd: bool = False
+    # Perplexity threshold for "confident" (tighten border). Below this = bd-1.
+    # Range: 1.0-4.0. Lower = more selective (fewer bd reductions).
+    perplexity_bd_low: float = 2.0
+    # Perplexity threshold for "uncertain" (widen border). Above this = bd+1.
+    # Range: 3.0-8.0.
+    perplexity_bd_high: float = 5.0
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)

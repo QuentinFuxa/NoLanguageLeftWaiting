@@ -42,13 +42,16 @@ from .alignatt import (
     compute_dynamic_word_batch,
     compute_entropy,
     compute_entropy_change,
+    compute_generation_perplexity,
     compute_logit_kl,
     compute_prediction_stability,
+    compute_token_perplexity,
     detect_ngram_repetition,
     entropy_change_supports_write,
     is_target_language,
     load_head_config,
     list_aggregation_methods,
+    perplexity_border_adjustment,
     prediction_stability_supports_write,
 )
 from .complexity import adaptive_params_from_complexity, adaptive_top_p_threshold
@@ -207,6 +210,9 @@ class AlignAttBackend(SimulMTBackend):
         self._current_attn_shift_write: Optional[bool] = None
         # Attention position history for monotonicity tracking (within generation loop)
         self._gen_positions_history: List[float] = []
+        # Perplexity-based adaptive border (Hibiki-inspired)
+        self._prev_gen_perplexity: Optional[float] = None  # Avg ppl from last translate()
+        self._perplexity_bd_delta: int = 0  # Current bd adjustment from perplexity
         # Optional trace collector for fusion calibration
         self._trace_collector = None
 
@@ -235,6 +241,19 @@ class AlignAttBackend(SimulMTBackend):
                         base_gen_cap=self.config.max_new_per_step,
                     )
                 )
+
+            # Perplexity-based adaptive border (Hibiki-inspired):
+            # Use generation confidence from the PREVIOUS translate() call to
+            # adjust border_distance. Low perplexity = confident = tighter bd.
+            if (self.config.perplexity_adaptive_bd
+                    and self._prev_gen_perplexity is not None):
+                effective_bd = perplexity_border_adjustment(
+                    self._prev_gen_perplexity,
+                    effective_bd,
+                    low_threshold=self.config.perplexity_bd_low,
+                    high_threshold=self.config.perplexity_bd_high,
+                )
+                self._perplexity_bd_delta = effective_bd - self.config.border_distance
 
             # Adaptive top_p threshold: adjust per-sentence from complexity
             effective_top_p = self.config.top_p_threshold
@@ -361,12 +380,21 @@ class AlignAttBackend(SimulMTBackend):
             max_gen = effective_gen_cap if not is_final_step else 256
             consecutive_border_hits = 0  # For border confirmation
             self._gen_positions_history = []  # Reset per translate() call
+            token_perplexities: List[float] = []  # Perplexity tracking
 
             for step in range(max_gen):
                 # logit_idx=0: after decode_single, batch index is always 0
                 next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
                 if next_tok in self._stop_ids or next_tok < 0:
                     break
+
+                # Track per-token perplexity for adaptive border
+                if self.config.perplexity_adaptive_bd:
+                    logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                    if logits is not None:
+                        token_perplexities.append(
+                            compute_token_perplexity(logits, next_tok)
+                        )
 
                 # N-gram repetition detection: halt on degenerate loops
                 if (self.config.repetition_max_repeats is not None
@@ -551,6 +579,12 @@ class AlignAttBackend(SimulMTBackend):
 
             self._prev_source_tokens = cur_source_tokens
 
+            # Update perplexity tracking for next translate() call
+            if self.config.perplexity_adaptive_bd and token_perplexities:
+                self._prev_gen_perplexity = compute_generation_perplexity(
+                    token_perplexities
+                )
+
             # Decode text: full sequence to avoid byte-fallback mojibake
             prev_text = (
                 ll.tokens_to_text(self._vocab, self._committed_ids, errors="ignore")
@@ -700,6 +734,8 @@ class AlignAttBackend(SimulMTBackend):
         self._source_words = []
         self._batch_counter = 0
         self._gen_positions_history = []
+        self._prev_gen_perplexity = None
+        self._perplexity_bd_delta = 0
 
         if self._ctx is not None:
             ll.free_context(self._ctx)
