@@ -147,7 +147,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~14,900 lines across 30 SimulMT modules, 920 tests
+### What exists now: ~15,000 lines across 30 SimulMT modules, 928 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |

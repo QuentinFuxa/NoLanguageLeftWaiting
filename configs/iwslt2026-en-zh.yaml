@@ -1,8 +1,8 @@
 # IWSLT 2026 SST -- EN-ZH optimal configuration
 # Model: HY-MT1.5-7B-Q8_0.gguf
-# Best FLORES (iteration 16): COMET=0.895, YAAL=4.67 at bd=3/wb=4/top_p
-# 99.9% of offline quality (full-sentence COMET=0.896)
-# Previous: COMET=0.879 (iter 15, bd=2/wb=3/ts_vote)
+# Best FLORES (iteration 18, 100 sent): COMET=0.894 [0.887, 0.901], YAAL=6.09
+# 99.8% of offline quality (full-sentence COMET=0.896)
+# Iteration 22: YAAL fix (batch_first_emission_time) -- YAAL should be lower
 
 model_path: /app/models/hymt1.5-7b-q8_0.gguf
 heads_path: /app/heads/translation_heads_hymt_en_zh.json

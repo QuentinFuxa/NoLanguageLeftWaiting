@@ -94,6 +94,29 @@ class TestSimulEvalEntry:
         errors = entry.validate()
         assert any("source_length" in e for e in errors)
 
+    def test_validate_cjk_char_level(self):
+        """CJK predictions with per-character delays should validate."""
+        # 4 Chinese characters, 4 delays (char-level)
+        entry = SimulEvalEntry(
+            prediction="\u7f8e\u56fd\u603b\u7edf",  # 美国总统
+            delays=[100.0, 100.0, 200.0, 200.0],
+            elapsed=[110.0, 110.0, 220.0, 220.0],
+            source_length=3000.0,
+        )
+        errors = entry.validate()
+        assert errors == [], f"CJK char-level should validate, got: {errors}"
+
+    def test_validate_cjk_word_level_also_accepted(self):
+        """CJK prediction with per-word delays (1 'word') should also validate."""
+        entry = SimulEvalEntry(
+            prediction="\u7f8e\u56fd\u603b\u7edf",  # 美国总统 = 1 word by split()
+            delays=[100.0],
+            elapsed=[110.0],
+            source_length=3000.0,
+        )
+        errors = entry.validate()
+        assert errors == [], f"CJK word-level should validate, got: {errors}"
+
 
 class TestEvalResultToSimulEval:
     def test_basic_conversion(self):
