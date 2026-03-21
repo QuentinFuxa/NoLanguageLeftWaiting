@@ -61,6 +61,8 @@ from .alignatt import (
     list_aggregation_methods,
     perplexity_border_adjustment,
     prediction_stability_supports_write,
+    apply_anti_lm_penalty,
+    compute_anti_lm_log_probs,
 )
 from .complexity import adaptive_params_from_complexity, adaptive_top_p_threshold
 from .fusion import fused_border_check, get_fusion_weights
@@ -410,6 +412,42 @@ class AlignAttBackend(SimulMTBackend):
                     )
                     self._prev_translate_attn = cur_src_attn.copy()
 
+            # Anti-LM contrastive decoding: compute source-continuation logits
+            # Uses a separate seq_id to do one forward pass on source-only text.
+            # These logits capture what the model would generate as source
+            # continuation; subtracting them during generation prevents copying.
+            # Skip for very short source (<3 tokens) where anti-LM has too
+            # little context to produce meaningful source-continuation logits.
+            anti_lm_log_probs: Optional[np.ndarray] = None
+            use_anti_lm = self.config.anti_lm
+            if use_anti_lm and len(cur_source_tokens) >= 3:
+                try:
+                    anti_lm_seq_id = 99  # High seq_id to avoid conflicts
+                    # Copy KV cache for source token range to a new seq_id
+                    ll.memory_seq_cp(
+                        self._mem, 0, anti_lm_seq_id,
+                        prefix_len, src_end
+                    )
+                    # Decode last source token to get continuation logits
+                    last_src_tok = cur_source_tokens[-1]
+                    ll.decode_single_at(
+                        self._ctx, last_src_tok,
+                        pos=src_end,  # Position right after source
+                        seq_id=anti_lm_seq_id,
+                        output=True,
+                    )
+                    anti_lm_raw = ll.get_logits_array(self._ctx, -1, self._nv)
+                    if anti_lm_raw is not None:
+                        anti_lm_log_probs = compute_anti_lm_log_probs(anti_lm_raw)
+                    # Clean up: remove anti-LM seq from KV cache
+                    ll.memory_seq_rm(self._mem, anti_lm_seq_id, 0, -1)
+                except Exception:
+                    # Anti-LM is non-critical; if it fails, proceed without it
+                    try:
+                        ll.memory_seq_rm(self._mem, 99, 0, -1)
+                    except Exception:
+                        pass
+
             # Generate tokens
             new_ids = []
             stopped_at_border = False
@@ -431,15 +469,22 @@ class AlignAttBackend(SimulMTBackend):
             use_temperature = self.config.generation_temperature > 0.0
             use_edt = self.config.entropy_dynamic_temperature
             use_confidence_trim = self.config.confidence_trim_threshold is not None
-            # Need logits if using any of: temperature, EDT, trimming, perplexity
+            # Need logits if using any of: temperature, EDT, trimming, perplexity, anti-LM
             need_logits = (use_temperature or use_edt or use_confidence_trim
-                           or self.config.perplexity_adaptive_bd)
+                           or self.config.perplexity_adaptive_bd
+                           or use_anti_lm)
 
             for step in range(max_gen):
                 # Token selection: EDT / temperature sampling / greedy argmax
                 if need_logits:
                     logits = ll.get_logits_array(self._ctx, -1, self._nv)
                     if logits is not None:
+                        # Anti-LM contrastive decoding: penalize source continuation
+                        if use_anti_lm and anti_lm_log_probs is not None:
+                            logits = apply_anti_lm_penalty(
+                                logits, anti_lm_log_probs, step,
+                                gamma=self.config.anti_lm_gamma,
+                            )
                         if use_edt:
                             # EDT: compute per-token dynamic temperature
                             dyn_temp = entropy_based_dynamic_temperature(

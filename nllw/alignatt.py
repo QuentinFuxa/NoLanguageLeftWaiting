@@ -2365,3 +2365,63 @@ def load_head_config(path: str) -> dict:
         "direction": data.get("direction", "unknown"),
         "n_heads": len(heads_list),
     }
+
+
+# ---------------------------------------------------------------------------
+# Anti-LM contrastive decoding (Sia et al., NAACL 2024, arxiv 2311.08324)
+# ---------------------------------------------------------------------------
+
+
+def apply_anti_lm_penalty(
+    logits: np.ndarray,
+    anti_lm_logits: np.ndarray,
+    step: int,
+    gamma: float = 0.3,
+) -> np.ndarray:
+    """Apply Anti-LM contrastive decoding penalty to translation logits.
+
+    Anti-LM decoding (Sia et al., NAACL 2024) prevents hallucination and
+    source-language copying by subtracting a "source-continuation" penalty
+    from the translation logits. The penalty is strongest at the first token
+    (where copying risk peaks) and decays exponentially.
+
+    Formula: logits_adjusted = logits - gamma^step * anti_lm_logits
+
+    The anti_lm_logits come from feeding ONLY the source text to the model
+    (no translation instructions). They capture what the model would
+    naturally generate as source-language continuation.
+
+    Args:
+        logits: Raw translation logits, shape (vocab_size,)
+        anti_lm_logits: Anti-LM logits from source-only forward pass,
+            shape (vocab_size,). Computed ONCE per translate() call.
+        step: Generation step (0-indexed). Decay factor = gamma^step.
+        gamma: Decay rate. 0.3 recommended (Sia et al.). Lower values
+            = faster decay (penalty diminishes quickly). Range: 0.1-1.0.
+
+    Returns:
+        Adjusted logits with anti-LM penalty applied, shape (vocab_size,).
+    """
+    if gamma <= 0.0 or step < 0:
+        return logits
+    decay = gamma ** step
+    # Apply penalty: subtract source-continuation likelihood
+    return logits - decay * anti_lm_logits
+
+
+def compute_anti_lm_log_probs(logits: np.ndarray) -> np.ndarray:
+    """Convert raw logits to log-probabilities for Anti-LM penalty.
+
+    The Anti-LM paper uses log p(y_1 | x) as the penalty term.
+    We convert raw logits to log-probabilities using stable log-softmax.
+
+    Args:
+        logits: Raw logits from source-only forward pass, shape (vocab_size,)
+
+    Returns:
+        Log-probabilities, shape (vocab_size,)
+    """
+    # Stable log-softmax: log(softmax(x)) = x - log(sum(exp(x)))
+    logits_stable = logits - np.max(logits)
+    log_sum_exp = np.log(np.sum(np.exp(logits_stable)))
+    return logits_stable - log_sum_exp
