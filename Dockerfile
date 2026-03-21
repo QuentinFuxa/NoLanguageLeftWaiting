@@ -9,9 +9,14 @@
 # Build:
 #   docker build -t iwslt2026-cuni .
 #
-# Run (single direction):
-#   docker run --gpus all iwslt2026-cuni \
-#     --config configs/iwslt2026-en-zh.yaml
+# Run (default: SimulStream HTTP server):
+#   docker run --gpus all -p 8080:8080 iwslt2026-cuni
+#
+# Run with specific direction:
+#   docker run --gpus all -p 8080:8080 -e NLLW_DEFAULT_DIRECTION=en-de iwslt2026-cuni
+#
+# Run self-test:
+#   docker run --gpus all iwslt2026-cuni python3 -m nllw.simulstream --model /app/models/hymt1.5-7b-q8_0.gguf --lang en-zh --test
 #
 # Estimated image size: ~20 GB
 # Estimated VRAM: ASR ~4GB + MT ~8GB = ~12GB total
@@ -50,9 +55,9 @@ COPY --from=builder /build/llama.cpp/build/src/libllama.so /app/lib/
 COPY --from=builder /build/llama.cpp/build/ggml/src/libggml*.so /app/lib/
 ENV LD_LIBRARY_PATH=/app/lib:${LD_LIBRARY_PATH}
 
-# Python dependencies
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+# Python dependencies (install from pyproject.toml + extras)
+COPY pyproject.toml /app/
+RUN pip3 install --no-cache-dir numpy sacrebleu pyyaml datasets
 
 # Models (large -- put early for Docker layer caching)
 # ASR model: Qwen3-ASR-1.7B (~3.4 GB)
@@ -67,17 +72,26 @@ COPY configs/iwslt2026-*.yaml /app/configs/
 
 # NLLW library
 COPY nllw/ /app/nllw/
-COPY setup.py pyproject.toml /app/
 RUN pip3 install -e .
+
+# Environment variables for NLLW processor auto-configuration
+ENV NLLW_MODEL_PATH=/app/models/hymt1.5-7b-q8_0.gguf
+ENV NLLW_HEADS_DIR=/app/heads
+ENV NLLW_CONFIGS_DIR=/app/configs
+ENV NLLW_N_GPU_LAYERS=99
+ENV NLLW_DEFAULT_DIRECTION=en-zh
 
 # Expose SimulStream HTTP API port
 EXPOSE 8080
 
+# Health check: verify Python imports work
+RUN python3 -c "from nllw.simulstream import NLLWSpeechProcessor; print('OK')"
+
 # Entrypoint: SimulStream HTTP server with our SpeechProcessor
 # The evaluators connect to port 8080 via HttpProxySpeechProcessor
-# For testing: override CMD with --test
+# SimulStream calls load_model() which reads env vars for model paths
+# Direction is set dynamically via set_source_language/set_target_language
 ENTRYPOINT ["python3", "-m", "simulstream.server.http_speech_processor_server", \
     "--speech-processor", "nllw.simulstream:NLLWSpeechProcessor", \
     "--port", "8080"]
-# Default config
 CMD []

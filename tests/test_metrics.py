@@ -5,6 +5,9 @@ from nllw.metrics import (
     compute_al,
     compute_laal,
     compute_yaal,
+    compute_longyaal,
+    compute_longyaal_ms,
+    compute_stream_laal,
     compute_ap,
     compute_dal,
     compute_max_consecutive_wait,
@@ -74,6 +77,117 @@ class TestYAAL:
 
     def test_empty(self):
         assert compute_yaal([], 5, 5) == 0.0
+
+
+class TestLongYAAL:
+    """Test LongYAAL -- IWSLT 2026 primary latency metric."""
+
+    def test_longyaal_equals_yaal_longform(self):
+        """LongYAAL is identical to YAAL with is_longform=True."""
+        delays = [1, 2, 3, 4]
+        longyaal = compute_longyaal(delays, source_length=4, target_length=4)
+        yaal = compute_yaal(delays, source_length=4, target_length=4, is_longform=True)
+        assert longyaal == pytest.approx(yaal)
+
+    def test_longyaal_counts_beyond_source(self):
+        """LongYAAL counts all delays, even past source boundary."""
+        delays = [1, 2, 10, 10]
+        longyaal = compute_longyaal(delays, source_length=3, target_length=4)
+        yaal_short = compute_yaal(delays, source_length=3, target_length=4, is_longform=False)
+        # LongYAAL includes the large delays, so it should be larger
+        assert longyaal > yaal_short
+
+    def test_longyaal_empty(self):
+        assert compute_longyaal([], 5, 5) == 0.0
+        assert compute_longyaal([1], 0, 5) == 0.0
+
+    def test_longyaal_basic_value(self):
+        """Known value: read-one-write-one policy."""
+        # gamma = max(4, 4) / 4 = 1
+        # longyaal = [(1-0) + (2-1) + (3-2) + (4-3)] / 4 = 1.0
+        delays = [1, 2, 3, 4]
+        assert compute_longyaal(delays, 4, 4) == pytest.approx(1.0, abs=0.01)
+
+
+class TestLongYAALMs:
+    """Test time-domain LongYAAL (milliseconds)."""
+
+    def test_ms_basic(self):
+        """LongYAAL in ms with known values."""
+        # 4 words emitted at 500ms, 1000ms, 1500ms, 2000ms
+        # Source is 2000ms total, target is 4 words
+        # gamma = max(4, 4) / 2000 = 0.002
+        # longyaal_ms = [(500-0) + (1000-500) + (1500-1000) + (2000-1500)] / 4
+        delays_ms = [500.0, 1000.0, 1500.0, 2000.0]
+        longyaal = compute_longyaal_ms(delays_ms, source_length_ms=2000.0, target_length=4)
+        assert longyaal > 0
+        # Should be about 500ms (each word arrives 500ms after ideal uniform)
+        assert longyaal == pytest.approx(500.0, abs=50.0)
+
+    def test_ms_empty(self):
+        assert compute_longyaal_ms([], 2000.0, 4) == 0.0
+        assert compute_longyaal_ms([500.0], 0.0, 4) == 0.0
+
+    def test_ms_simultaneous(self):
+        """Near-zero latency when words arrive immediately."""
+        # If words arrive at 0, 250, 500, 750 with source 2000ms
+        delays_ms = [0.0, 250.0, 500.0, 750.0]
+        longyaal = compute_longyaal_ms(delays_ms, source_length_ms=2000.0, target_length=4)
+        # Should be very low (ahead of uniform schedule)
+        assert longyaal < 500.0
+
+
+class TestStreamLAAL:
+    """Test StreamLAAL -- IWSLT 2026 secondary latency metric."""
+
+    def test_basic(self):
+        """StreamLAAL with monotonic delays."""
+        delays = [1, 2, 3, 4]
+        stream_laal = compute_stream_laal(delays, source_length=5, target_length=4)
+        assert stream_laal > 0
+
+    def test_empty(self):
+        assert compute_stream_laal([], 5, 5) == 0.0
+        assert compute_stream_laal([1], 0, 5) == 0.0
+
+    def test_monotonizes_delays(self):
+        """StreamLAAL should monotonize delays (non-monotonic -> monotonic)."""
+        # Non-monotonic: word 2 has lower delay than word 1
+        delays_non_mono = [3, 1, 4, 5]
+        delays_mono = [1, 2, 3, 4]
+        # StreamLAAL of non-monotonic should be >= monotonic version
+        sl1 = compute_stream_laal(delays_non_mono, 5, 4)
+        sl2 = compute_stream_laal(delays_mono, 5, 4)
+        assert sl1 >= sl2 - 0.01
+
+    def test_stops_at_source(self):
+        """StreamLAAL stops counting at source boundary."""
+        delays = [1, 2, 10, 10]
+        stream_laal = compute_stream_laal(delays, source_length=3, target_length=4)
+        # Only counts delays < 3 (after monotonization)
+        longyaal = compute_longyaal(delays, source_length=3, target_length=4)
+        # StreamLAAL should be less than LongYAAL since it stops at boundary
+        assert stream_laal < longyaal
+
+
+class TestComputeAllMetricsNewFields:
+    """Test that compute_all_metrics includes new fields."""
+
+    def test_includes_longyaal(self):
+        delays = [2, 3, 4, 5]
+        m = compute_all_metrics(delays, source_length=5, target_length=4)
+        assert m.longyaal > 0
+        assert m.stream_laal > 0
+        assert m.longyaal_ms == 0.0  # No ms delays provided
+
+    def test_includes_longyaal_ms(self):
+        delays = [2, 3, 4, 5]
+        delays_ms = [800.0, 1200.0, 1600.0, 2000.0]
+        m = compute_all_metrics(
+            delays, source_length=5, target_length=4,
+            delays_ms=delays_ms, source_length_ms=2500.0,
+        )
+        assert m.longyaal_ms > 0
 
 
 class TestAverageProportion:

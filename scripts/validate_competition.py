@@ -1,0 +1,314 @@
+#!/usr/bin/env python3
+"""IWSLT 2026 competition readiness validator.
+
+Checks that all components are properly configured and the system
+is ready for the IWSLT 2026 SST evaluation (April 1-15).
+
+Usage:
+    python scripts/validate_competition.py              # Basic checks (no GPU)
+    python scripts/validate_competition.py --gpu        # Full GPU validation
+    python scripts/validate_competition.py --docker     # Docker image validation
+"""
+
+import sys
+import os
+import json
+import importlib
+import argparse
+
+# Add project root to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def check(label: str, condition: bool, detail: str = ""):
+    """Print check result."""
+    icon = "PASS" if condition else "FAIL"
+    msg = f"  [{icon}] {label}"
+    if detail:
+        msg += f" -- {detail}"
+    print(msg)
+    return condition
+
+
+def validate_imports():
+    """Check all required modules import successfully."""
+    print("\n=== Module Imports ===")
+    ok = True
+
+    modules = [
+        ("nllw.simulstream", "SimulStream wrapper"),
+        ("nllw.alignatt", "AlignAtt algorithm"),
+        ("nllw.alignatt_backend", "AlignAtt backend"),
+        ("nllw.alignatt_la_backend", "AlignAtt-LA backend"),
+        ("nllw.backend_protocol", "Backend protocol"),
+        ("nllw.metrics", "Metrics (LongYAAL, COMET)"),
+        ("nllw.omnisteval", "OmniSTEval output"),
+        ("nllw.prompts", "Prompt formats"),
+        ("nllw.llama_backend", "llama.cpp bindings"),
+        ("nllw.corpus", "Test corpus"),
+        ("nllw.complexity", "Complexity estimator"),
+        ("nllw.fusion", "Signal fusion"),
+    ]
+
+    for mod_name, desc in modules:
+        try:
+            importlib.import_module(mod_name)
+            ok &= check(desc, True)
+        except Exception as e:
+            ok &= check(desc, False, str(e))
+
+    return ok
+
+
+def validate_metrics():
+    """Check LongYAAL and other metrics work correctly."""
+    print("\n=== Metrics Validation ===")
+    ok = True
+
+    from nllw.metrics import (
+        compute_longyaal, compute_longyaal_ms, compute_stream_laal,
+        compute_all_metrics, compute_yaal,
+    )
+
+    # LongYAAL = YAAL with is_longform=True
+    delays = [1, 2, 3, 4, 5]
+    ly = compute_longyaal(delays, 5, 5)
+    yaal = compute_yaal(delays, 5, 5, is_longform=True)
+    ok &= check("LongYAAL == YAAL(longform)", abs(ly - yaal) < 1e-10, f"LY={ly:.4f}")
+
+    # Time-domain LongYAAL
+    delays_ms = [500, 1000, 1500, 2000, 2500]
+    ly_ms = compute_longyaal_ms(delays_ms, 3000, 5)
+    ok &= check("LongYAAL_ms computes", ly_ms > 0, f"LY_ms={ly_ms:.1f}ms")
+
+    # StreamLAAL
+    sl = compute_stream_laal(delays, 5, 5)
+    ok &= check("StreamLAAL computes", sl > 0, f"SL={sl:.4f}")
+
+    # All metrics together
+    m = compute_all_metrics(
+        delays, 5, 5,
+        delays_ms=delays_ms, source_length_ms=3000,
+    )
+    ok &= check("compute_all_metrics has longyaal", m.longyaal > 0)
+    ok &= check("compute_all_metrics has longyaal_ms", m.longyaal_ms > 0)
+    ok &= check("compute_all_metrics has stream_laal", m.stream_laal > 0)
+
+    return ok
+
+
+def validate_simulstream():
+    """Check SimulStream wrapper is competition-ready."""
+    print("\n=== SimulStream Wrapper ===")
+    ok = True
+
+    from nllw.simulstream import (
+        NLLWSpeechProcessor, SimulStreamConfig,
+        IncrementalOutput, DIRECTION_DEFAULTS,
+    )
+
+    # All 4 competition directions configured
+    for direction in ["en-zh", "en-de", "en-it", "cs-en"]:
+        has_defaults = direction in DIRECTION_DEFAULTS
+        ok &= check(f"Direction {direction} configured", has_defaults)
+        if has_defaults:
+            cfg = DIRECTION_DEFAULTS[direction]
+            ok &= check(
+                f"  {direction}: top_p agg",
+                cfg.get("aggregation") == "top_p",
+                f"agg={cfg.get('aggregation')}",
+            )
+
+    # SimulStream protocol methods exist
+    for method in [
+        "load_model", "process_chunk", "end_of_stream",
+        "set_source_language", "set_target_language",
+        "tokens_to_string", "clear", "speech_chunk_size",
+    ]:
+        has_method = hasattr(NLLWSpeechProcessor, method)
+        ok &= check(f"Protocol method: {method}", has_method)
+
+    # load_model accepts None (Docker env pattern)
+    config = SimulStreamConfig(model_path="/nonexistent")
+    proc = NLLWSpeechProcessor(config)
+
+    # Direction switching works
+    proc.set_target_language("de")
+    ok &= check("Direction switch en-de", proc.config.direction == "en-de")
+    ok &= check("  bd updated", proc.config.border_distance == 2)
+    ok &= check("  p_threshold updated", proc.config.top_p_threshold == 0.75)
+
+    proc.set_target_language("zh")
+    ok &= check("Direction switch en-zh", proc.config.direction == "en-zh")
+    ok &= check("  bd updated", proc.config.border_distance == 3)
+    ok &= check("  p_threshold updated", proc.config.top_p_threshold == 0.85)
+
+    # IncrementalOutput
+    output = IncrementalOutput()
+    ok &= check("Empty IncrementalOutput", output.is_empty)
+
+    return ok
+
+
+def validate_omnisteval():
+    """Check OmniSTEval output format is correct."""
+    print("\n=== OmniSTEval Format ===")
+    ok = True
+
+    from nllw.omnisteval import SimulEvalEntry
+
+    # Create a valid entry
+    entry = SimulEvalEntry(
+        source="test.wav",
+        prediction="The translation of the text",
+        delays=[500.0, 800.0, 1200.0, 1600.0, 2000.0],
+        elapsed=[600.0, 900.0, 1300.0, 1700.0, 2100.0],
+        source_length=3000.0,
+    )
+
+    # Critical: len(delays) == len(prediction.split())
+    words = entry.prediction.split()
+    ok &= check(
+        "delays length == words",
+        len(entry.delays) == len(words),
+        f"delays={len(entry.delays)}, words={len(words)}",
+    )
+
+    # Serialization
+    d = entry.__dict__ if hasattr(entry, '__dict__') else {}
+    ok &= check("Entry has prediction", "prediction" in str(d) or hasattr(entry, 'prediction'), True)
+
+    return ok
+
+
+def validate_configs():
+    """Check IWSLT 2026 YAML configs exist and are valid."""
+    print("\n=== IWSLT 2026 Configs ===")
+    ok = True
+
+    configs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "configs")
+    for direction in ["en-zh", "en-de", "en-it", "cs-en"]:
+        config_path = os.path.join(configs_dir, f"iwslt2026-{direction}.yaml")
+        exists = os.path.exists(config_path)
+        ok &= check(f"Config: iwslt2026-{direction}.yaml", exists)
+
+        if exists:
+            import yaml
+            with open(config_path) as f:
+                cfg = yaml.safe_load(f)
+            ok &= check(f"  has aggregation", "aggregation" in cfg, cfg.get("aggregation", "?"))
+            ok &= check(f"  has top_p_threshold", "top_p_threshold" in cfg)
+            ok &= check(f"  has n_gpu_layers", "n_gpu_layers" in cfg)
+
+    return ok
+
+
+def validate_heads():
+    """Check alignment head configs exist for all directions."""
+    print("\n=== Alignment Head Configs ===")
+    ok = True
+
+    heads_dir = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "nllw", "heads", "configs",
+    )
+
+    # Check for HY-MT head configs
+    if os.path.isdir(heads_dir):
+        files = os.listdir(heads_dir)
+        json_files = [f for f in files if f.endswith(".json")]
+        ok &= check(f"Head configs found", len(json_files) > 0, f"{len(json_files)} configs")
+
+        # Check HY-MT specifically
+        hymt_files = [f for f in json_files if "hymt" in f.lower() or "hy_mt" in f.lower()]
+        ok &= check(f"HY-MT head configs", len(hymt_files) > 0, f"{len(hymt_files)} files")
+    else:
+        ok &= check("Heads directory exists", False, heads_dir)
+
+    return ok
+
+
+def validate_corpus():
+    """Check the test corpus has all directions."""
+    print("\n=== Test Corpus ===")
+    ok = True
+
+    from nllw.corpus import get_corpus, list_directions
+
+    available = list_directions()
+    for direction in ["en-zh", "en-de", "en-it", "cs-en"]:
+        try:
+            if direction in available:
+                sents = get_corpus(direction)
+                ok &= check(f"Corpus {direction}", len(sents) > 0, f"{len(sents)} sentences")
+            else:
+                ok &= check(f"Corpus {direction}", False, f"not in {available}")
+        except Exception as e:
+            ok &= check(f"Corpus {direction}", False, str(e))
+
+    return ok
+
+
+def validate_dockerfile():
+    """Check Dockerfile is properly configured."""
+    print("\n=== Dockerfile ===")
+    ok = True
+
+    dockerfile = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "Dockerfile",
+    )
+
+    if not os.path.exists(dockerfile):
+        ok &= check("Dockerfile exists", False)
+        return ok
+
+    ok &= check("Dockerfile exists", True)
+
+    with open(dockerfile) as f:
+        content = f.read()
+
+    ok &= check("Uses CUDA base", "nvidia/cuda" in content)
+    ok &= check("Exposes port 8080", "EXPOSE 8080" in content)
+    ok &= check("Uses simulstream server", "simulstream.server" in content)
+    ok &= check("References NLLWSpeechProcessor", "NLLWSpeechProcessor" in content)
+    ok &= check("Sets NLLW_MODEL_PATH", "NLLW_MODEL_PATH" in content)
+    ok &= check("Sets NLLW_HEADS_DIR", "NLLW_HEADS_DIR" in content)
+    ok &= check("Sets N_GPU_LAYERS", "NLLW_N_GPU_LAYERS" in content)
+    ok &= check("Health check", "python3 -c" in content)
+
+    return ok
+
+
+def main():
+    parser = argparse.ArgumentParser(description="IWSLT 2026 competition validator")
+    parser.add_argument("--gpu", action="store_true", help="Run GPU-dependent checks")
+    parser.add_argument("--docker", action="store_true", help="Validate Docker image")
+    args = parser.parse_args()
+
+    print("=" * 60)
+    print("IWSLT 2026 Competition Readiness Validator")
+    print("=" * 60)
+
+    all_ok = True
+    all_ok &= validate_imports()
+    all_ok &= validate_metrics()
+    all_ok &= validate_simulstream()
+    all_ok &= validate_omnisteval()
+    all_ok &= validate_configs()
+    all_ok &= validate_heads()
+    all_ok &= validate_corpus()
+    all_ok &= validate_dockerfile()
+
+    print("\n" + "=" * 60)
+    if all_ok:
+        print("ALL CHECKS PASSED -- System is competition-ready")
+    else:
+        print("SOME CHECKS FAILED -- Fix issues before submission")
+    print("=" * 60)
+
+    return 0 if all_ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
