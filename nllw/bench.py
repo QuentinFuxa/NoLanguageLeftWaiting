@@ -56,6 +56,7 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "entropy": "entropy_veto_threshold",
         "agg": "aggregation",
         "topp": "top_p_threshold",
+        "adaptp": "adaptive_top_p",
         "dynbd": "dynamic_border",
         "ssbd": "ssbd_beta",
         "mask": "display_mask_k",
@@ -123,6 +124,7 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "entropy_veto_threshold": args.entropy_threshold,
         "aggregation": args.aggregation,
         "top_p_threshold": args.top_p_threshold,
+        "adaptive_top_p": args.adaptive_top_p,
         "dynamic_border": args.dynamic_border,
         "ssbd_beta": args.ssbd_beta,
         "la_forced_decode": args.forced_decode,
@@ -381,6 +383,8 @@ def main():
                         help="Attention aggregation method for border detection")
     parser.add_argument("--top-p-threshold", type=float, default=0.8,
                         help="Cumulative mass threshold for top_p aggregation (0.5-0.95)")
+    parser.add_argument("--adaptive-top-p", action="store_true",
+                        help="Adaptive top_p threshold per sentence based on source complexity")
     parser.add_argument("--dynamic-border", action="store_true",
                         help="Enable entropy-based dynamic border distance")
     parser.add_argument("--ssbd-beta", type=float, default=None,

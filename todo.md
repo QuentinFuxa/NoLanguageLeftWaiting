@@ -493,6 +493,45 @@
   - `run_topp_tuning.py`: p_threshold sweep + top_p_weighted comparison
 - [x] 785+ unit tests (30 new, all passing)
 
+## DONE -- Iteration 18: XCOMET-XL Scorer, Adaptive top_p, Bootstrap CI, Research
+
+- [x] **XCOMET-XL separate-process scorer** (`nllw/xcomet_scorer.py`, ~220 lines):
+  - Solves the persistent OOM issue (XCOMET-XL 12GB + translation model 8GB > A40 46GB)
+  - Runs scoring in a fresh subprocess with no translation model loaded
+  - `score_xcomet_subprocess()`: launch subprocess, pass JSON, get scores back
+  - `save_hypotheses_json()`: export eval results for separate scoring
+  - CLI: `python -m nllw.xcomet_scorer --input results.json --output scored.json`
+  - Also supports: `--hyps hyps.txt --lang en-zh` for scoring hypothesis files
+  - Integrated into `eval.py`: `--xcomet` flag now uses subprocess approach
+  - Previous in-process approach (backend.close + gc + torch.cache) still OOM'd
+- [x] **Adaptive top_p threshold** (`complexity.py`, `backend_protocol.py`, both backends, `bench.py`):
+  - Novel: per-sentence top_p threshold based on source text complexity
+  - Simple/short sentences -> lower threshold (faster, tighter frontier)
+  - Complex/long sentences -> higher threshold (more conservative, safer)
+  - `adaptive_top_p_threshold()`: maps complexity score to threshold delta
+  - `adaptive_top_p` config field, `--adaptive-top-p` CLI, `adaptp` sweep shortname
+  - Wired into both AlignAtt and AlignAtt-LA backends
+  - **First A40 result**: EN-ZH COMET=0.895 (-0.001) YAAL=5.43 (-0.57 latency!)
+  - Trades 0.1% quality for 9.5% latency reduction
+- [x] **Bootstrap confidence intervals** (`metrics.py`):
+  - `bootstrap_confidence_interval()`: 95% CI via percentile bootstrap
+  - `paired_bootstrap_test()`: paired significance test (Koehn, 2004)
+  - Integrated into eval.py: COMET summary now shows [lo, hi] CI
+  - Enables statistically rigorous comparison between configs
+- [x] **Research: latest SOTA SimulMT** (2025-2026):
+  - **Qwen3.5-9B NOT suitable**: hybrid DeltaNet arch, only 25% layers have softmax attention
+  - **ExPosST (arXiv:2603.14903)**: positional pre-allocation for KV cache, medium effort
+  - **Translation Heads (ICLR 2026)**: validates our TS-scoring head detection approach
+  - **IWSLT 2026 uses COMET wmt22-comet-da** (not XCOMET-XL) -- we're aligned
+  - **Interleaved SFT, SimulMask**: require fine-tuning, not applicable to our zero-shot approach
+  - **Official baselines**: Qwen3-ASR-1.7B + Qwen3-4B-Instruct + local agreement
+- [x] **GPU experiments on A40** (`scripts/run_iteration18_experiments.py`):
+  - Phase 1: Adaptive top_p vs fixed optimal (all 4 directions)
+  - Phase 2: XCOMET-XL subprocess validation
+  - Phase 3: 100-sentence tuned p_threshold confirmation
+  - Phase 4: Variance estimation (different sentence subsets)
+- [x] 34 new tests (all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
