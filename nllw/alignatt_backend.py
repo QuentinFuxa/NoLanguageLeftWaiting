@@ -41,10 +41,13 @@ from .alignatt import (
     compute_attention_shift,
     compute_dynamic_word_batch,
     confidence_adaptive_word_batch,
+    entropy_based_dynamic_temperature,
     entropy_gated_top_p_threshold,
     language_pair_gen_cap,
     merged_attention_entropy,
+    sample_with_temperature,
     should_defer_batch,
+    trim_low_confidence_tokens,
     compute_entropy,
     compute_entropy_change,
     compute_generation_perplexity,
@@ -424,20 +427,51 @@ class AlignAttBackend(SimulMTBackend):
             consecutive_border_hits = 0  # For border confirmation
             self._gen_positions_history = []  # Reset per translate() call
             token_perplexities: List[float] = []  # Perplexity tracking
+            token_logprobs: List[float] = []  # For confidence trimming
+            use_temperature = self.config.generation_temperature > 0.0
+            use_edt = self.config.entropy_dynamic_temperature
+            use_confidence_trim = self.config.confidence_trim_threshold is not None
+            # Need logits if using any of: temperature, EDT, trimming, perplexity
+            need_logits = (use_temperature or use_edt or use_confidence_trim
+                           or self.config.perplexity_adaptive_bd)
 
             for step in range(max_gen):
-                # logit_idx=0: after decode_single, batch index is always 0
-                next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
-                if next_tok in self._stop_ids or next_tok < 0:
-                    break
-
-                # Track per-token perplexity for adaptive border
-                if self.config.perplexity_adaptive_bd:
+                # Token selection: EDT / temperature sampling / greedy argmax
+                if need_logits:
                     logits = ll.get_logits_array(self._ctx, -1, self._nv)
                     if logits is not None:
-                        token_perplexities.append(
-                            compute_token_perplexity(logits, next_tok)
-                        )
+                        if use_edt:
+                            # EDT: compute per-token dynamic temperature
+                            dyn_temp = entropy_based_dynamic_temperature(
+                                logits,
+                                base_temperature=max(self.config.generation_temperature, 0.1),
+                            )
+                            next_tok = sample_with_temperature(logits, dyn_temp)
+                        elif use_temperature:
+                            next_tok = sample_with_temperature(
+                                logits, self.config.generation_temperature
+                            )
+                        else:
+                            next_tok = int(np.argmax(logits))
+                        # Track per-token logprob for confidence trimming
+                        if use_confidence_trim:
+                            logits_stable = logits - np.max(logits)
+                            log_probs = logits_stable - np.log(
+                                np.sum(np.exp(logits_stable))
+                            )
+                            token_logprobs.append(float(log_probs[next_tok]))
+                        # Track perplexity for adaptive border
+                        if self.config.perplexity_adaptive_bd:
+                            token_perplexities.append(
+                                compute_token_perplexity(logits, next_tok)
+                            )
+                    else:
+                        next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
+                else:
+                    # logit_idx=0: after decode_single, batch index is always 0
+                    next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
+                if next_tok in self._stop_ids or next_tok < 0:
+                    break
 
                 # N-gram repetition detection: halt on degenerate loops
                 if (self.config.repetition_max_repeats is not None
@@ -627,8 +661,24 @@ class AlignAttBackend(SimulMTBackend):
 
                 new_ids.append(next_tok)
 
+            # Confidence-gated token trimming: remove low-confidence trailing
+            # tokens before committing. These tokens were generated near the
+            # border where the model was running out of source context.
+            # They'll be regenerated with more source in the next translate().
+            if (use_confidence_trim and new_ids and token_logprobs
+                    and not is_final_step):
+                trimmed = trim_low_confidence_tokens(
+                    new_ids, token_logprobs,
+                    threshold=self.config.confidence_trim_threshold,
+                    min_keep=1,
+                )
+                if len(trimmed) < len(new_ids):
+                    new_ids = trimmed
+                    # Also trim logprobs for consistent avg_logprob computation
+                    token_logprobs = token_logprobs[:len(trimmed)]
+
             # Clean up exploration tokens from KV cache
-            if stopped_at_border:
+            if stopped_at_border or (use_confidence_trim and new_ids):
                 cached_pos = diverge_pos + total_new + len(new_ids)
                 ll.memory_seq_rm(self._mem, 0, cached_pos, -1)
 
@@ -642,7 +692,10 @@ class AlignAttBackend(SimulMTBackend):
 
             # Compute average log-probability of generated tokens (quality diagnostic)
             avg_logprob = None
-            if token_perplexities:
+            if token_logprobs:
+                # Use per-token logprobs from confidence tracking (most accurate)
+                avg_logprob = float(np.mean(token_logprobs))
+            elif token_perplexities:
                 # perplexity = exp(-logprob), so logprob = -log(perplexity)
                 avg_logprob = -float(np.mean(np.log(token_perplexities)))
             elif new_ids:

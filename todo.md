@@ -777,6 +777,76 @@
   - bench.py output updated with XCOMET-XL + StreamLAAL columns
   - Phase 0 in experiment script: XCOMET-XL baseline + prompt A/B test
 
+## DONE -- Iteration 25: Generation Temperature + Confidence Trimming + Competition Script
+
+- [x] **Generation temperature** (`generation_temperature` config, `--generation-temperature` CLI):
+  - Novel for AlignAtt SimulMT: no published work on temperature effects in attention-based SimulMT
+  - Low temperature (0.05-0.3) explores alternative translations near the greedy path
+  - Can help escape suboptimal greedy decisions, especially for morphologically rich targets
+  - `sample_with_temperature()`: temperature-scaled softmax sampling
+  - Pure greedy when temperature=0.0 (default, backwards compatible)
+  - CLI: `--generation-temperature 0.1`
+  - Sweep: `temp=0.0,0.05,0.1,0.2,0.3`
+  - **Needs GPU validation**
+- [x] **Confidence-gated token trimming** (`confidence_trim_threshold` config, `--confidence-trim` CLI):
+  - Novel: no published work on post-generation token trimming for SimulMT quality improvement
+  - After generation stops (border hit or max tokens), check per-token logprobs
+  - Trim trailing tokens with logprob below threshold (they'll be regenerated with more context)
+  - Prevents committing low-confidence trailing tokens that hurt XCOMET-XL
+  - XCOMET-XL penalizes semantic errors 39x more than COMET wmt22 -> trimming high impact
+  - `trim_low_confidence_tokens()`: scan from end, keep tokens >= threshold
+  - min_keep=1 prevents empty output
+  - CLI: `--confidence-trim -3.0`
+  - Sweep: `conftrim=-2.0,-3.0,-4.0,-5.0`
+  - **Needs GPU validation**
+- [x] **Entropy-based dynamic temperature (EDT)** (`entropy_dynamic_temperature` config, `--entropy-dynamic-temperature` CLI):
+  - Based on "EDT: Entropy-based Dynamic Temperature Sampling" (arxiv 2403.14541)
+  - Per-token adaptive temperature: confident tokens (low entropy) -> near-greedy, uncertain tokens (high entropy) -> explore alternatives
+  - More principled than fixed temperature: adapts to model's per-token confidence
+  - `entropy_based_dynamic_temperature()`: linear entropy-to-temperature mapping with clamping
+  - Overrides fixed `generation_temperature` with per-token adaptive version
+  - CLI: `--entropy-dynamic-temperature`, sweep: `edt=0,1`
+  - **Needs GPU validation**
+- [x] **Per-token logprob tracking**: generation loop now tracks per-token logprobs when confidence trimming or temperature is enabled. Shared computation: logits fetched once, used for both sampling and logprob tracking.
+- [x] **9-phase competition experiment script** (`scripts/run_iteration25_experiments.py`):
+  - Phase 0: XCOMET-XL baseline (CRITICAL -- re-eval all 4 directions)
+  - Phase 1: HY-MT prompt A/B test (hymt vs hymt-official)
+  - Phase 2: Temperature sweep + EDT (0.0, 0.05, 0.1, 0.15, 0.2, 0.3, EDT)
+  - Phase 3: Confidence trimming sweep (None, -2.0, -3.0, -4.0, -5.0)
+  - Phase 4: Entropy-gated top_p (iter 24 validation)
+  - Phase 5: Confidence-adaptive wb (iter 23 validation)
+  - Phase 6: Language-pair gen cap (iter 23 validation)
+  - Phase 7: Combined features (5 combinations x 4 directions)
+  - Phase 8: Competition OmniSTEval output (XCOMET-XL + JSONL)
+- [x] 1012 unit tests (38 new, all passing)
+- [x] Competition validator: all checks passing
+- [x] **Research findings** (from web/paper search):
+  - **Anti-LM contrastive decoding** (ACL 2024): subtract source-language penalty from logits to prevent hallucination. +20 BLEU on failure cases. Could implement.
+  - **EDT** (arxiv 2403.14541): IMPLEMENTED (see above)
+  - **QE-Fusion** (ACL 2024): multi-candidate + quality estimation fusion. Too slow for streaming.
+  - **CUNI beam search + AlignAtt**: competition-validated, +1 BLEU. Medium implementation effort.
+
+### Generation temperature experiments (new in iteration 25)
+- [ ] **Temperature sweep EN-ZH**: `python -m nllw.bench --sweep "temp=0.0,0.05,0.1,0.2,0.3" --lang en-zh --comet --save`
+- [ ] **Temperature per direction**: `python -m nllw.bench --generation-temperature 0.1 --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Temperature + confidence trim**: `python -m nllw.bench --generation-temperature 0.1 --confidence-trim -3.0 --lang en-zh --comet --save`
+
+### Confidence trimming experiments (new in iteration 25)
+- [ ] **Confidence trim sweep**: `python -m nllw.bench --sweep "conftrim=-2.0,-3.0,-4.0,-5.0" --lang en-zh --comet --save`
+- [ ] **Confidence trim per direction**: `python -m nllw.bench --confidence-trim -3.0 --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Confidence trim + entropy-gated**: `python -m nllw.bench --confidence-trim -3.0 --entropy-gated-top-p --lang en-zh --comet --save`
+
+### EDT experiments (new in iteration 25)
+- [ ] **EDT basic test**: `python -m nllw.bench --entropy-dynamic-temperature --generation-temperature 0.1 --lang en-zh --comet --save`
+- [ ] **EDT per direction**: `python -m nllw.bench --entropy-dynamic-temperature --generation-temperature 0.1 --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **EDT + confidence trim**: `python -m nllw.bench --entropy-dynamic-temperature --generation-temperature 0.1 --confidence-trim -3.0 --lang en-zh --comet --save`
+- [ ] **EDT + entropy-gated top_p**: `python -m nllw.bench --entropy-dynamic-temperature --generation-temperature 0.1 --entropy-gated-top-p --lang en-zh --comet --save`
+
+### Iteration 25 full experiment suite
+- [ ] **Run full experiment script on A40**: `python scripts/run_iteration25_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
+- [ ] **Quick validation**: `python scripts/run_iteration25_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick`
+- [ ] **XCOMET-XL baseline only**: `python scripts/run_iteration25_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 0`
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -926,6 +996,8 @@
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
 ### HIGHEST Priority (ready to implement)
+- [ ] **Anti-LM contrastive decoding** (ACL 2024, arxiv 2311.08324): Subtract source-language continuation penalty from logits during generation. `logit_final = log p(y|x,prompt) - gamma^t * log p(y|x)`. Training-free, single forward pass overhead. +20 BLEU on failure cases (hallucinations, source copying). Top-priority research finding from iteration 25.
+- [x] **EDT entropy-based dynamic temperature** (IMPLEMENTED, iteration 25): Per-token adaptive temperature from logit entropy. `--entropy-dynamic-temperature` CLI.
 - [x] **LSG logit KL divergence** (IMPLEMENTED, iteration 8): KV cache fork + probe for border confirmation. `--lsg-kl 7.0` CLI. **Needs GPU testing.**
 
 ### High Priority (open research gaps, no published work)
