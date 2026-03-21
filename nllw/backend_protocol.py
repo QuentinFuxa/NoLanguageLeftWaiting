@@ -43,6 +43,11 @@ class BackendConfig:
     entropy_veto_threshold: Optional[float] = None
     # Attention aggregation method (ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p)
     aggregation: str = "ts_vote"
+    # Top-p threshold for the top_p aggregation method (0.0-1.0)
+    # Controls what fraction of attention mass defines the "frontier".
+    # Lower = tighter (closer to argmax), higher = broader (further right frontier).
+    # Default 0.8. Range: 0.5-0.95.
+    top_p_threshold: float = 0.8
     # Dynamic border distance (adjusts per-token based on attention entropy)
     dynamic_border: bool = False
     # SSBD (Self-Speculative Biased Decoding) for LA backend

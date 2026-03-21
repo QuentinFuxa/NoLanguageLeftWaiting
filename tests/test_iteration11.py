@@ -464,21 +464,32 @@ class TestDirectionDefaults:
             assert d in DIRECTION_DEFAULTS
 
     def test_en_zh_config(self):
-        """EN-ZH should use bd=3, wb=2."""
+        """EN-ZH should use bd=3, wb=4, top_p (iteration 16 best: COMET=0.895)."""
         cfg = DIRECTION_DEFAULTS["en-zh"]
         assert cfg["border_distance"] == 3
-        assert cfg["word_batch"] == 2
+        assert cfg["word_batch"] == 4
+        assert cfg["aggregation"] == "top_p"
 
     def test_cs_en_config(self):
-        """CS-EN should use bd=2, wb=1 (lowest latency)."""
+        """CS-EN should use bd=3, wb=3, top_p (iteration 16 best: COMET=0.876)."""
         cfg = DIRECTION_DEFAULTS["cs-en"]
-        assert cfg["border_distance"] == 2
-        assert cfg["word_batch"] == 1
-
-    def test_en_it_wb(self):
-        """EN-IT should use wb=3 (confirmed +1.5 BLEU over wb=2)."""
-        cfg = DIRECTION_DEFAULTS["en-it"]
+        assert cfg["border_distance"] == 3
         assert cfg["word_batch"] == 3
+        assert cfg["aggregation"] == "top_p"
+
+    def test_en_de_config(self):
+        """EN-DE should use bd=2, wb=3, top_p (iteration 16 best: COMET=0.881)."""
+        cfg = DIRECTION_DEFAULTS["en-de"]
+        assert cfg["border_distance"] == 2
+        assert cfg["word_batch"] == 3
+        assert cfg["aggregation"] == "top_p"
+
+    def test_en_it_config(self):
+        """EN-IT should use bd=2, wb=3, top_p (iteration 16 best: COMET=0.884)."""
+        cfg = DIRECTION_DEFAULTS["en-it"]
+        assert cfg["border_distance"] == 2
+        assert cfg["word_batch"] == 3
+        assert cfg["aggregation"] == "top_p"
 
     def test_all_use_hymt(self):
         """All directions should use HY-MT prompt format."""
@@ -554,16 +565,19 @@ class TestNLLWSpeechProcessorConfig:
         proc.set_target_language("de")
         assert proc._target_lang == "de"
         assert proc.config.direction == "en-de"
-        # Should apply direction defaults
-        assert proc.config.border_distance == 3
-        assert proc.config.word_batch == 2
+        # Should apply direction defaults (iteration 16 best: bd=2, wb=3, top_p)
+        assert proc.config.border_distance == 2
+        assert proc.config.word_batch == 3
+        assert proc.config.aggregation == "top_p"
 
     def test_set_target_language_it(self):
-        """EN-IT should use wb=3 from direction defaults."""
+        """EN-IT should use bd=2, wb=3, top_p from direction defaults."""
         config = SimulStreamConfig(direction="en-zh")
         proc = NLLWSpeechProcessor(config)
         proc.set_target_language("it")
-        assert proc.config.word_batch == 3  # EN-IT specific
+        assert proc.config.border_distance == 2
+        assert proc.config.word_batch == 3
+        assert proc.config.aggregation == "top_p"
 
     def test_tokens_to_string(self):
         """tokens_to_string should concatenate tokens."""

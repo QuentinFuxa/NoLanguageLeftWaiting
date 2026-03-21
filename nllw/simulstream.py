@@ -90,10 +90,13 @@ class SimulStreamConfig:
     direction: str = "en-zh"
     backend_type: str = "alignatt"
     border_distance: int = 3
-    word_batch: int = 2
+    word_batch: int = 4
+    aggregation: str = "top_p"
+    top_p_threshold: float = 0.85
     prompt_format: str = "hymt"
     context_sentences: int = 0
     n_ctx: int = 2048
+    repetition_max_repeats: Optional[int] = None  # Disabled: hurts EN-ZH by -0.004 COMET
 
     # All BackendConfig params are forwarded
     extra_backend_params: Dict[str, Any] = field(default_factory=dict)
@@ -120,11 +123,15 @@ class SimulStreamConfig:
             "direction": self.direction,
             "border_distance": self.border_distance,
             "word_batch": self.word_batch,
+            "aggregation": self.aggregation,
+            "top_p_threshold": self.top_p_threshold,
             "prompt_format": self.prompt_format,
             "context_sentences": self.context_sentences,
             "n_ctx": self.n_ctx,
             "target_lang": target_lang,
         }
+        if self.repetition_max_repeats is not None:
+            d["repetition_max_repeats"] = self.repetition_max_repeats
         d.update(self.extra_backend_params)
         return BackendConfig.from_dict(d)
 
@@ -147,24 +154,34 @@ class SimulStreamConfig:
 # ---------------------------------------------------------------------------
 
 DIRECTION_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    # Updated iteration 17: top_p + tuned p_threshold per direction
+    # See SHARED_TASK_NOTES.md for full benchmark results
     "en-zh": {
         "border_distance": 3,
-        "word_batch": 2,
+        "word_batch": 4,
+        "aggregation": "top_p",
+        "top_p_threshold": 0.85,  # COMET 0.896 (=offline baseline!)
         "prompt_format": "hymt",
     },
     "en-de": {
-        "border_distance": 3,
-        "word_batch": 2,
+        "border_distance": 2,
+        "word_batch": 3,
+        "aggregation": "top_p",
+        "top_p_threshold": 0.75,  # COMET 0.881, lower latency
         "prompt_format": "hymt",
     },
     "en-it": {
-        "border_distance": 3,
+        "border_distance": 2,
         "word_batch": 3,
+        "aggregation": "top_p",
+        "top_p_threshold": 0.9,   # COMET 0.891
         "prompt_format": "hymt",
     },
     "cs-en": {
-        "border_distance": 2,
-        "word_batch": 1,
+        "border_distance": 3,
+        "word_batch": 3,
+        "aggregation": "top_p",
+        "top_p_threshold": 0.9,   # COMET 0.876
         "prompt_format": "hymt",
     },
 }

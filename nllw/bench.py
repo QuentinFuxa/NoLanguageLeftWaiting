@@ -55,6 +55,7 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "topk": "top_k_heads",
         "entropy": "entropy_veto_threshold",
         "agg": "aggregation",
+        "topp": "top_p_threshold",
         "dynbd": "dynamic_border",
         "ssbd": "ssbd_beta",
         "mask": "display_mask_k",
@@ -121,6 +122,7 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "wait_k": args.wait_k,
         "entropy_veto_threshold": args.entropy_threshold,
         "aggregation": args.aggregation,
+        "top_p_threshold": args.top_p_threshold,
         "dynamic_border": args.dynamic_border,
         "ssbd_beta": args.ssbd_beta,
         "la_forced_decode": args.forced_decode,
@@ -373,10 +375,12 @@ def main():
                         help="Entropy veto threshold (None=disabled)")
     parser.add_argument("--aggregation", default="ts_vote",
                         choices=["ts_vote", "softmax_mean", "entropy_weighted",
-                                 "consensus", "geomean", "top_p", "ensemble",
-                                 "gaussian_kernel", "gaussian_kernel_continuous",
-                                 "cumulative"],
+                                 "consensus", "geomean", "top_p", "top_p_weighted",
+                                 "ensemble", "gaussian_kernel",
+                                 "gaussian_kernel_continuous", "cumulative"],
                         help="Attention aggregation method for border detection")
+    parser.add_argument("--top-p-threshold", type=float, default=0.8,
+                        help="Cumulative mass threshold for top_p aggregation (0.5-0.95)")
     parser.add_argument("--dynamic-border", action="store_true",
                         help="Enable entropy-based dynamic border distance")
     parser.add_argument("--ssbd-beta", type=float, default=None,
@@ -431,6 +435,7 @@ def main():
     # Output
     parser.add_argument("--save", action="store_true", help="Save results to registry")
     parser.add_argument("--output", help="Output JSON file")
+    parser.add_argument("--save-hypotheses", help="Save sources/hypotheses/references to JSON for offline XCOMET scoring")
     parser.add_argument("--omnisteval", help="Export to OmniSTEval JSONL format")
 
     # Calibration
@@ -473,6 +478,26 @@ def main():
                 f, indent=2, ensure_ascii=False,
             )
         print(f"Saved to {output_path}", file=sys.stderr)
+
+    # Save hypotheses for offline XCOMET-XL scoring
+    if args.save_hypotheses and len(results) >= 1:
+        for r in results:
+            if r.per_sentence:
+                hypo_data = {
+                    "direction": r.direction,
+                    "backend_type": r.backend_type,
+                    "n_sentences": r.n_sentences,
+                    "comet": r.comet,
+                    "bleu": r.bleu,
+                    "sources": [ps["source"] for ps in r.per_sentence],
+                    "hypotheses": [ps["hypothesis"] for ps in r.per_sentence],
+                    "references": [ps["reference"] for ps in r.per_sentence],
+                    "config": r.config,
+                }
+                with open(args.save_hypotheses, "w") as f:
+                    json.dump(hypo_data, f, indent=2, ensure_ascii=False)
+                print(f"Saved hypotheses to {args.save_hypotheses}", file=sys.stderr)
+                break
 
     # OmniSTEval export
     if args.omnisteval and len(results) == 1 and results[0].per_sentence:
