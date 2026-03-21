@@ -695,6 +695,45 @@
   - Added `simulstream` to pip install list
 - [x] 930 unit tests (10 new, all passing)
 
+## DONE -- Iteration 23: Confidence-Adaptive Word Batching, Language-Pair Gen Cap
+
+- [x] **Confidence-adaptive word batching** (`confidence_adaptive_wb` config, `--confidence-adaptive-wb` CLI):
+  - Novel: no published work on confidence-based batch size adaptation for SimulMT
+  - Uses avg_logprob from iteration 22's per-step confidence tracking
+  - High confidence (logprob > -0.5) -> reduce effective wb by 1 (faster emission, lower YAAL)
+  - Low confidence (logprob < -2.0) -> increase effective wb by 1 (more source context, better quality)
+  - Moderate confidence -> no change (same as base wb)
+  - Applied after dynamic_word_batch and complexity_adaptive (stacks with both)
+  - Wired into both AlignAtt and AlignAtt-LA backends
+  - State tracking: `_prev_avg_logprob`, reset on segment end
+  - CLI: `--confidence-adaptive-wb --confidence-wb-high -0.5 --confidence-wb-low -2.0`
+  - Sweep: `confwb=0,1`, `confhi=-0.3,-0.5,-0.7`, `conflo=-1.5,-2.0,-3.0`
+  - **Needs GPU testing** to measure YAAL reduction vs quality impact
+- [x] **Language-pair-aware generation cap** (`language_pair_gen_cap` config, `--language-pair-gen-cap` CLI):
+  - Adjusts max tokens per step based on known source/target compression ratios
+  - EN->ZH: 0.85 ratio (Chinese is compact), EN->DE: 1.15 (German compounds are longer)
+  - EN->IT/FR/ES: 1.10, CS->EN: 1.10, ZH->EN: 1.20
+  - Safety margin: 1.3x (allows some overgeneration for quality)
+  - Prevents overgeneration for compact targets (waste, hallucination risk)
+  - Wired into AlignAtt backend, applied before generation loop
+  - CLI: `--language-pair-gen-cap`
+  - Sweep: `lpgcap=0,1`
+  - **Needs GPU testing** to measure quality/speed impact
+- [x] **avg_logprob in AlignAtt-LA backend**:
+  - LA backend now computes and returns avg_logprob in TranslationStep
+  - Computed from last token's logits after retranslation
+  - Enables confidence-adaptive wb for LA backend too
+- [x] **8-phase GPU experiment script** (`scripts/run_iteration23_experiments.py`):
+  - Phase 1: Baseline validation (20 sent)
+  - Phase 2: YAAL fix validation (100 sent)
+  - Phase 3: Confidence-adaptive wb sweep (100 sent, all 4 dirs + threshold sweep)
+  - Phase 4: Language-pair gen cap (100 sent, all 4 dirs)
+  - Phase 5: Source-aware batching (100 sent)
+  - Phase 6: Perplexity adaptive bd (100 sent)
+  - Phase 7: Combined features (100 sent, 6 combinations)
+  - Phase 8: Competition OmniSTEval output (100 sent)
+- [x] 955 unit tests (25 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -803,6 +842,23 @@
 - [ ] **Run full experiment script on A40**: `python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
 - [ ] **Run with real gold transcript**: `python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 3 --gold-jsonl /path/to/gold.jsonl`
 
+### Confidence-adaptive wb experiments (new in iteration 23)
+- [ ] **Confidence-adaptive wb basic test**: `python -m nllw.bench --confidence-adaptive-wb --lang en-zh --comet --save` vs baseline
+- [ ] **Confidence threshold sweep**: `python -m nllw.bench --sweep "confwb=0,1 confhi=-0.3,-0.5,-0.7,-1.0 conflo=-1.5,-2.0,-3.0" --lang en-zh --comet --save`
+- [ ] **Confidence wb per direction**: `python -m nllw.bench --confidence-adaptive-wb --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Confidence wb + adaptive top_p combined**: `python -m nllw.bench --confidence-adaptive-wb --adaptive-top-p --lang en-zh --comet --save`
+- [ ] **Confidence wb + source-aware combined**: `python -m nllw.bench --confidence-adaptive-wb --source-aware-batch --lang en-zh --comet --save`
+- [ ] **Confidence wb + pplbd combined**: `python -m nllw.bench --confidence-adaptive-wb --perplexity-adaptive-bd --lang en-zh --comet --save`
+
+### Language-pair gen cap experiments (new in iteration 23)
+- [ ] **Language-pair gen cap basic test**: `python -m nllw.bench --language-pair-gen-cap --lang en-zh --comet --save` vs baseline
+- [ ] **Language-pair gen cap per direction**: `python -m nllw.bench --language-pair-gen-cap --lang en-zh,en-de,en-it,cs-en --comet --save`
+
+### Iteration 23 full experiment suite
+- [ ] **Run full experiment script on A40**: `python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
+- [ ] **Quick validation**: `python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick`
+- [ ] **Phase 3 only (confidence wb)**: `python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 3`
+
 ### Calibration experiments (new in iteration 13)
 - [ ] **Collect fusion traces on A40**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save --collect-traces traces_enzh.json`
 - [ ] **Collect traces per direction**: Run with `--collect-traces` for en-zh, en-de, en-it, cs-en
@@ -880,6 +936,16 @@
 - [x] **Translation Heads validated** (ICLR 2026 q8fTgw8e5E): Our TS-scoring head detection independently validated. Sparse, cross-lingually consistent, causal.
 - [ ] **Hikari WAIT token** (arxiv 2603.11578, March 2026): Decoder Time Dilation reduces overhead during wait periods. Could inspire efficiency improvements.
 - [x] **IWSLT 2026 eval confirmed**: April 1-15, system paper April 24, conference July 3-4 at ACL 2026 San Diego. COMET wmt22-comet-da primary metric. Single H100 80GB.
+
+### NEW Iteration 23 Research Agent Findings (March 2026)
+- [ ] **SimulU history management** (arxiv 2603.16924, FBK/Sara Papi): Same group as AlignAtt! Cross-attention history management for long-form SimulS2S. Training-free. Their history management could improve SimulStream longform mode.
+- [ ] **IWSLT 2026 "Extra Context" subtrack**: NEW opportunity. Baselines show NER context from PDF papers "consistently improves quality." Qwen3-30B-A3B for NER extraction. Worth exploring.
+- [ ] **IWSLT baselines: Qwen3-ASR + forced aligner**: Official cascade uses Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B + Qwen3-4B-Instruct. We should significantly outperform with HY-MT1.5-7B.
+- [ ] **No new zero-shot AlignAtt improvements found**: Field is split between fine-tuning (ExPosST, Hikari) and end-to-end (Hibiki-Zero). Our training-free approach with top_p at 99.8% offline is near frontier.
+- [x] **Research confirms our approach is SOTA for zero-shot**: No papers found beating AlignAtt + top_p + KV cache for training-free SimulMT with decoder-only LLMs.
+- [ ] **TSSR hallucination guard** (arxiv 2406.07239): Target-Side to Source-Side Relevance Ratio from attention. Hallucination words have TSSR>1.2 (over-relying on target context). Complements coverage_threshold. Training-free.
+- [ ] **Entropy-gated expensive signals**: Only run LSG KL probe when generation entropy is high (uncertain tokens). AGD paper (2509.26307) shows entropy gating at 80th percentile reduces cost 5x. Apply to our lsg_kl_threshold.
+- [ ] **Attribution-inspired border**: Instead of just attention mass, compute source attribution ratio (committed vs uncommitted source). Could approximate with attention weights. AGD uses LRP but attention approximation should work for SimulMT.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025) -- needs LoRA fine-tuning. Position mismatch validated as negligible. See analysis.

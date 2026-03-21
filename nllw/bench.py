@@ -71,6 +71,10 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "tempref": "head_temp_reference",
         "dynwb": "dynamic_word_batch",
         "srcaware": "source_aware_batching",
+        "confwb": "confidence_adaptive_wb",
+        "confhi": "confidence_wb_high",
+        "conflo": "confidence_wb_low",
+        "lpgcap": "language_pair_gen_cap",
         "infogain": "info_gain_threshold",
         "shiftk": "shift_k_threshold",
         "confirm": "border_confirm",
@@ -142,6 +146,10 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "head_temp_reference": args.head_temp_ref,
         "dynamic_word_batch": args.dynamic_wb,
         "source_aware_batching": args.source_aware_batch,
+        "confidence_adaptive_wb": args.confidence_adaptive_wb,
+        "confidence_wb_high": args.confidence_wb_high,
+        "confidence_wb_low": args.confidence_wb_low,
+        "language_pair_gen_cap": args.language_pair_gen_cap,
         "info_gain_threshold": args.info_gain,
         "shift_k_threshold": args.shift_k,
         "border_confirm": args.border_confirm,
@@ -419,6 +427,14 @@ def main():
                         help="Enable dynamic word_batch (adjust by source length)")
     parser.add_argument("--source-aware-batch", action="store_true",
                         help="Source-aware batching: defer if batch ends on function word")
+    parser.add_argument("--confidence-adaptive-wb", action="store_true",
+                        help="Confidence-adaptive word batching: adjust wb from prev generation confidence")
+    parser.add_argument("--confidence-wb-high", type=float, default=-0.5,
+                        help="Logprob threshold for confident=reduce wb (default: -0.5)")
+    parser.add_argument("--confidence-wb-low", type=float, default=-2.0,
+                        help="Logprob threshold for uncertain=increase wb (default: -2.0)")
+    parser.add_argument("--language-pair-gen-cap", action="store_true",
+                        help="Language-pair-aware gen cap: tighter limit for compact target languages")
     parser.add_argument("--info-gain", type=float, default=None,
                         help="Info gain threshold for border modulation (0.3=recommended, None=disabled)")
     parser.add_argument("--shift-k", type=float, default=None,
