@@ -1,90 +1,84 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 13, 2026-03-21)
+## Current State (after Iteration 14, 2026-03-21)
 
-**28 SimulMT modules (~13,000 lines), 731 tests passing**
+**28 SimulMT modules (~13,000 lines), 731+ tests passing**
+**FIRST GPU E2E TEST PASSED on A40 with HY-MT1.5-7B**
 
-### Module Overview
-- **Core**: prompts.py, llama_backend.py, backend_protocol.py, alignatt.py (~1750 lines), alignatt_backend.py, alignatt_la_backend.py
-- **Baselines**: baselines.py (wait-k, fixed-rate), full-sentence, eager in alignatt_backend.py
-- **Research tools**: eval.py, bench.py, simulate.py, corpus.py, experiment.py, analysis.py, research.py, detect_heads.py, omnisteval.py, head_transfer.py, complexity.py, metrics.py
-- **Novel frameworks**: fusion.py (8-signal weighted fusion), calibrate.py (data-driven weight optimization)
-- **IWSLT 2026**: simulstream.py (SpeechProcessor wrapper), Dockerfile, per-direction YAML configs
-- **Infrastructure**: web_debug/server.py (FastAPI), scripts/run_experiments.sh (GPU automation)
-- **Head configs**: 22 pre-computed configs in nllw/heads/configs/
+### What happened in Iteration 14
+- **GPU E2E validated**: NLLW deployed to A40, full AlignAtt pipeline works with HY-MT1.5-7B.Q8_0.gguf
+- **3 critical bugs fixed** (see below)
+- **Research update**: Latest SimulMT papers reviewed (Hikari, ExPosST, RASST, SeqPO-SiMT, SimulU, Translation Heads ICLR 2026)
+- All tests pass locally (731+)
 
-### 8 Border Detection Signals (Complete Taxonomy)
-| Signal | Type | Module |
-|--------|------|--------|
-| Standard AlignAtt | Within-step, position | alignatt.py |
-| Shift-k mass | Within-step, position | alignatt.py |
-| Info gain (KL) | Within-step, position | alignatt.py |
-| Source coverage | Within-step, coverage | alignatt.py |
-| Attention monotonicity | Within-step, temporal | alignatt.py |
-| N-gram repetition | Within-step, output | alignatt.py |
-| Entropy change (REINA) | Cross-step, output | alignatt.py |
-| Prediction stability | Cross-step, output | alignatt.py |
-| Attention shift | Cross-step, input | alignatt.py |
-| LSG logit KL | Cross-step, logit | alignatt_backend.py |
+### Critical Bugs Fixed (Iteration 14)
+1. **Attention stride bug** (`llama_backend.py`): `get_attn_weights()` used caller-provided `ctx_size` (current position) as stride between heads. The actual C layout is `n_heads * n_ctx` (full context window). Fixed: stride is now always `n_ctx(ctx)`. Without this fix, all heads except the first read garbage data.
+2. **n_gpu_layers missing** (`backend_protocol.py`, `alignatt_backend.py`, `alignatt_la_backend.py`): `BackendConfig` had no `n_gpu_layers` field, defaulting to CPU-only. Added and wired into both backends.
+3. **Backend auto-import** (`backend_protocol.py`): `create_backend()` failed with "Unknown backend type" because modules with `@register_backend` decorators were never imported. Added `_ensure_backends_imported()`.
 
-### New in Iteration 13
-- **Fusion weight calibration** (`nllw/calibrate.py`, 1040 lines):
-  - TraceCollector for recording signal scores during translation
-  - Alignment-based + quality-based border labeling
-  - Grid search weight optimization per direction
-  - Signal importance analysis (discriminative power + correlation)
-  - CLI: `python -m nllw.calibrate --demo` or `--traces FILE --analyze`
-  - `--collect-traces FILE` in bench.py for GPU trace collection
-  - `--calibrate-traces FILE` in bench.py for running calibration
-- **OmniSTEval bug fix**: `eval_result_to_omnisteval()` now returns all sentences (was only returning last)
-- **OmniSTEval format rewrite** (CRITICAL): Old format was per-emission-event (wrong!). New `SimulEvalEntry` + `eval_result_to_simuleval()` produces correct per-segment JSONL with `prediction`, `delays[]` (ms), `elapsed[]` (ms), `source_length` (ms). Validated against OmniSTEval v0.1.6 schema.
-- **Trace collection in backend**: `set_trace_collector()` on SimulMTBackend, wired into fusion border check
+### GPU Performance (A40, HY-MT1.5-7B.Q8_0.gguf)
+| Metric | Value |
+|--------|-------|
+| Model load | 2.3s |
+| Prompt throughput | 136 tok/s |
+| Generation throughput | 37-39 tok/s |
+| VRAM | ~8.5 GB |
+| Latency per word | ~140ms |
+| SimulMT quality | Good (needs tuning) |
+
+### Sample Translation (bd=3, wb=2)
+```
+"The president of the United States announced new economic policies today"
+-> 总统宣布了新的经济政策。 (1528ms, 7.2 words/s)
+```
+Note: Missing "美国" because bd=3/wb=2 emits before "United States" is seen. Higher bd/wb would improve.
 
 ## What to do next
 
-### Priority 1: GPU Testing (NOTHING has been tested on real GPU yet!)
-
-All code (iterations 1-13) is unit-tested but never run with an actual model. This is the #1 blocker.
-
+### Priority 1: FLORES Benchmark on A40
+All infra is deployed. Run benchmarks:
 ```bash
-# Step 1: Basic E2E validation
-python -m nllw.bench --model /path/to/HY-MT1.5-7B.gguf --lang en-zh -n 20
+# On A40 (already deployed to /home/fuxa/nllw_deploy/)
+cd /home/fuxa/nllw_deploy
+export LLAMA_CPP_LIB=/home/fuxa/llama.cpp/build/bin/libllama.so
 
-# Step 2: Collect traces for calibration
-python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 \
+# Basic benchmark (need to set up bench.py to work with direct model path)
+python3 -m nllw.bench --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --lang en-zh -n 20
+
+# With COMET scoring
+python3 -m nllw.bench --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --lang en-zh --comet --save
+
+# Signal fusion experiment
+python3 -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 \
   --lang en-zh --comet --save --collect-traces traces_enzh.json
-
-# Step 3: Calibrate fusion weights from real traces
-python -m nllw.bench --calibrate-traces traces_enzh.json --lang en-zh \
-  --calibrate-output weights_enzh.json
-
-# Step 4: Benchmark with calibrated weights vs defaults
-# (use the exported weights in experiment configs)
-
-# OR use the full experiment runner:
-./scripts/run_experiments.sh 1 --lang en-zh --model /path/to/model.gguf --comet
 ```
 
-### Priority 2: IWSLT 2026 Competition (Eval April 1-15)
-- **Docker packaging**: H100 80GB, Q8_0 7B GGUF = ~8GB VRAM
-- **SimulStream E2E test**: Wire ASR into NLLWSpeechProcessor
-- **OmniSTEval verification**: Test output with official `omnisteval longform` + XCOMET-XL
-- **Extra Context subtrack**: Terminology extraction from ACL PDFs (RASST-style, +3 BLEU)
-- **Per-direction tuning**: Use calibrated fusion weights per direction
+**Blocker**: `bench.py` may need a `--model` CLI flag and `--n-gpu-layers` flag to work on the A40. Check and add if missing.
 
-### Priority 3: Research Directions
-- **RASST retrieval-augmented** (arxiv 2601.22777): +3 BLEU, +16% terminology for Extra Context
-- **AliBaStr-MT learned border** (arxiv 2503.22051): Train classifier on our TS alignment data
-- **ExPosST position slots** (arxiv 2603.14903): Zero-recomputation KV cache
-- **GRPO fine-tuning** (SeqPO-SiMT, arxiv 2505.20622): RL-optimize R/W decisions
+### Priority 2: Parameter Sweep
+```bash
+python3 -m nllw.bench --sweep "bd=2,3,4 wb=2,3" --lang en-zh --comet --save
+```
+
+### Priority 3: Competition Prep (IWSLT 2026, eval April 1-15)
+- Docker finalization (llama.cpp already built on A40)
+- OmniSTEval format verification
+- Per-direction optimal configs
+- Extra Context subtrack (terminology injection via prompting, +2-3 BLEU from RASST)
+
+### Priority 4: Research Directions (from iteration 14 research)
+- **Translation Heads (ICLR 2026)**: Compare with our TS-scoring. May reveal better heads.
+- **RASST terminology injection**: No training, just prompt augmentation. +2-3 BLEU.
+- **ExPosST position slots**: Zero KV recomputation. Requires LoRA fine-tuning.
+- **SimulU training-free policy**: Training-free cross-attention, 8 MuST-C languages.
 
 ## Key Context
 
-- **IWSLT 2026**: Eval April 1-15, language pairs: EN-ZH, EN-DE, EN-IT, CS-EN
+- **IWSLT 2026**: Eval April 1-15, ~10 days away
 - **Metrics**: LongYAAL (primary latency), COMET (primary quality), XCOMET-XL (internal)
 - **CUNI won 2025**: AlignAtt + LA + forced decode. We extend with 8+ additional signals + fusion
 - **Hikari is main competitor**: Policy-free WAIT tokens, SOTA on EN-JA/DE/RU
 - **Our advantage**: AlignAtt with ANY model via llama.cpp (CUNI couldn't use AlignAtt with EuroLLM)
 - **HY-MT1.5-7B is champion**: 0.842 XCOMET-XL EN-ZH
-- llama.cpp built with PR #20086 on A40
+- **A40 ready**: Model + llama.cpp + NLLW deployed at /home/fuxa/nllw_deploy/
 - **Dead ends**: EAST, LoRA no-think, GDN, confidence-only, fixed-rate, TAF, Seed-X-PPO, Qwen3-4B, HY-MT1.8B

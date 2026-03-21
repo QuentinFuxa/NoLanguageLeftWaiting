@@ -111,6 +111,7 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "backend_type": args.backend,
         "model_path": args.model or "",
         "heads_path": args.heads or "",
+        "n_gpu_layers": args.n_gpu_layers,
         "direction": args.lang,
         "border_distance": args.border_distance,
         "word_batch": args.word_batch,
@@ -359,6 +360,8 @@ def main():
     parser.add_argument("--backend", default="alignatt")
     parser.add_argument("--model", help="Path to GGUF model")
     parser.add_argument("--heads", help="Path to head config JSON")
+    parser.add_argument("--n-gpu-layers", type=int, default=0,
+                        help="GPU layers to offload (0=CPU, 99=all)")
 
     # Parameters
     parser.add_argument("--border-distance", type=int, default=3)

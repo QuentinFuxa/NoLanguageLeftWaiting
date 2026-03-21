@@ -358,6 +358,30 @@
   - 18 new tests for SimulEval format
 - [x] 731 unit tests (78 new, all passing)
 
+## DONE -- Iteration 14: First GPU E2E Validation + Critical Bug Fixes
+
+- [x] **NLLW deployed to A40**: Full codebase at `/home/fuxa/nllw_deploy/`, verified with HY-MT1.5-7B.Q8_0.gguf
+- [x] **First GPU E2E test PASSED**: Model load (2.3s), tokenize, decode (136 tok/s prompt, 39 tok/s gen), attention extraction
+- [x] **Full AlignAtt backend test PASSED**: Word-by-word SimulMT with border detection working correctly
+  - EN-ZH: "The president of the United States announced new policies today" -> "美国总统今天宣布了新的政策。" (full sentence, 39 tok/s)
+  - SimulMT (bd=3, wb=2): 总统宣布了新的经济政策。 (1528ms, 7.2 words/s)
+  - Multi-sentence: reset() + translate() working correctly
+- [x] **Critical bug fix: attention stride** (`llama_backend.py`):
+  - `get_attn_weights()` used `ctx_size` (current pos) as stride between heads
+  - Actual C layout: `n_heads * n_ctx` (full context window)
+  - Fixed: stride = `n_ctx(ctx)`. Without this, all heads except first read garbage data.
+- [x] **Critical bug fix: n_gpu_layers** (`backend_protocol.py`, both backends):
+  - `BackendConfig` had no `n_gpu_layers` field, defaulting to CPU-only (unusable on GPU)
+  - Added field and wired into `load_model()` in both AlignAtt and AlignAtt-LA backends
+- [x] **Critical bug fix: backend auto-import** (`backend_protocol.py`):
+  - `create_backend()` failed because backend modules never imported (decorators didn't fire)
+  - Added `_ensure_backends_imported()` with lazy importlib imports
+- [x] **Research update**: Reviewed latest SimulMT papers (Hikari, ExPosST, RASST, SeqPO-SiMT, SimulU, Translation Heads ICLR 2026)
+  - Key finding: CUNI (2025 winner) couldn't use AlignAtt with LLMs -- our llama.cpp approach is a unique advantage
+  - RASST terminology injection: +2-3 BLEU, no training needed
+  - Translation Heads (ICLR 2026): validates our TS-scoring head detection
+- [x] All tests pass (731+)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
