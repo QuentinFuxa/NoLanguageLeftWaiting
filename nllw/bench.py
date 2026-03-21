@@ -169,14 +169,31 @@ def run_benchmark(args):
     config = BackendConfig.from_dict(_build_base_config_dict(args))
 
     backend = create_backend(config)
+
+    # Attach trace collector if requested
+    trace_collector = None
+    if getattr(args, 'collect_traces', None):
+        from .calibrate import TraceCollector
+        trace_collector = TraceCollector()
+        backend.set_trace_collector(trace_collector)
+
     try:
         result = evaluate_backend(
             backend, corpus,
             compute_comet_score=args.comet,
             compute_xcomet_score=args.xcomet,
+            trace_collector=trace_collector,
         )
     finally:
         backend.close()
+
+    # Save traces if collected
+    if trace_collector and args.collect_traces:
+        from .calibrate import save_traces
+        traces = trace_collector.get_traces()
+        save_traces(traces, args.collect_traces)
+        print(f"Saved {len(traces)} signal traces to {args.collect_traces}",
+              file=sys.stderr)
 
     return result
 
@@ -255,6 +272,72 @@ def run_sweep(args):
         print(f"{params} {bleu_str:>6} {comet_str:>7} {r.avg_al:>6.2f} {r.avg_yaal:>6.2f}")
 
     return results
+
+
+def _run_calibration(args):
+    """Run fusion weight calibration pipeline.
+
+    Two modes:
+    1. --calibrate: Use synthetic traces (fast, no GPU needed, for testing)
+    2. --calibrate-traces FILE: Use real traces collected from GPU runs
+    """
+    from .calibrate import (
+        generate_synthetic_traces,
+        load_traces,
+        run_calibration,
+        export_weights,
+        print_calibration_report,
+        analyze_signal_importance,
+    )
+
+    # Determine directions
+    directions = [d.strip() for d in args.lang.split(",")]
+
+    if args.calibrate_traces:
+        # Load real traces
+        traces = load_traces(args.calibrate_traces)
+        print(f"Loaded {len(traces)} traces from {args.calibrate_traces}",
+              file=sys.stderr)
+    else:
+        # Generate synthetic traces
+        print("Generating synthetic traces for calibration demo...",
+              file=sys.stderr)
+        traces = []
+        for d in directions:
+            t = generate_synthetic_traces(
+                n_sentences=args.n, direction=d, seed=42
+            )
+            traces.extend(t)
+        print(f"  Generated {len(traces)} synthetic traces", file=sys.stderr)
+
+    # Analyze signal importance
+    print("\n--- Signal Importance Analysis ---", file=sys.stderr)
+    for d in directions:
+        importance = analyze_signal_importance(
+            traces, d, args.border_distance
+        )
+        if importance:
+            print(f"\n  {d}:", file=sys.stderr)
+            for signal, stats in importance.items():
+                print(f"    {signal:20s}: "
+                      f"discriminative={stats['discriminative_power']:+.3f} "
+                      f"corr={stats['correlation']:+.3f}",
+                      file=sys.stderr)
+
+    # Run calibration
+    results = run_calibration(
+        traces,
+        directions=directions,
+        border_distance=args.border_distance,
+        method=args.calibrate_method,
+    )
+    print_calibration_report(results)
+
+    # Export
+    output_path = args.calibrate_output or args.output
+    if output_path:
+        export_weights(results, output_path)
+        print(f"\nCalibrated weights saved to {output_path}", file=sys.stderr)
 
 
 def main():
@@ -347,7 +430,27 @@ def main():
     parser.add_argument("--output", help="Output JSON file")
     parser.add_argument("--omnisteval", help="Export to OmniSTEval JSONL format")
 
+    # Calibration
+    parser.add_argument("--calibrate", action="store_true",
+                        help="Run fusion weight calibration on synthetic traces "
+                             "(use --calibrate-traces with real traces for GPU calibration)")
+    parser.add_argument("--calibrate-traces", type=str, default=None,
+                        help="Path to collected signal traces JSON for calibration")
+    parser.add_argument("--calibrate-output", type=str, default=None,
+                        help="Output path for calibrated fusion weights JSON")
+    parser.add_argument("--calibrate-method", type=str, default="alignment",
+                        choices=["alignment", "quality"],
+                        help="Labeling method for calibration (default: alignment)")
+    parser.add_argument("--collect-traces", type=str, default=None,
+                        help="Collect signal traces during benchmark and save to JSON "
+                             "(for later calibration with --calibrate-traces)")
+
     args = parser.parse_args()
+
+    # Calibration mode
+    if args.calibrate or args.calibrate_traces:
+        _run_calibration(args)
+        return
 
     # Dispatch
     if args.compare:
@@ -370,10 +473,12 @@ def main():
 
     # OmniSTEval export
     if args.omnisteval and len(results) == 1 and results[0].per_sentence:
-        from .omnisteval import eval_result_to_omnisteval, write_jsonl_file
+        from .omnisteval import eval_result_to_simuleval, write_simuleval_jsonl_file
         eval_dict = {"per_sentence": results[0].per_sentence}
-        entries = eval_result_to_omnisteval(eval_dict, talk_id_prefix=args.lang)
-        write_jsonl_file(entries, args.omnisteval)
+        entries = eval_result_to_simuleval(
+            eval_dict, source_prefix=args.lang
+        )
+        write_simuleval_jsonl_file(entries, args.omnisteval)
 
 
 if __name__ == "__main__":

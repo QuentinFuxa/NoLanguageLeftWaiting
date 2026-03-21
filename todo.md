@@ -319,6 +319,45 @@
   - Fusion-specific Phase 4: fusion vs cascade head-to-head
 - [x] 653 unit tests (72 new, all passing)
 
+## DONE -- Iteration 13: Fusion Weight Calibration Pipeline + Bug Fixes
+
+- [x] **Fusion weight calibration pipeline** (`nllw/calibrate.py`, ~1040 lines):
+  - Novel: no published work on data-driven fusion weight calibration for SimulMT border detection
+  - `SignalSnapshot` + `SentenceTrace` data structures for signal trace recording
+  - `TraceCollector`: callback-based trace collection during translation
+  - Alignment-based border labeling: monotonic + reorder-aware word alignment heuristics
+  - Quality-based border labeling: uses COMET/BLEU to flip labels for bad translations
+  - `calibrate_direction()`: full pipeline (filter, label, grid search) per direction
+  - `run_calibration()`: multi-direction calibration with auto-detection
+  - `analyze_signal_importance()`: per-signal discriminative power + correlation analysis
+  - `generate_synthetic_traces()`: reproducible synthetic data for testing calibration
+  - Save/load traces JSON, export/load calibrated weights JSON
+  - CLI: `python -m nllw.calibrate --demo`, `--traces FILE`, `--analyze`, `--output weights.json`
+  - Numpy type serialization handled (bool_, int_, float_ -> JSON-safe)
+- [x] **Bench CLI calibration integration**:
+  - `--calibrate` flag for synthetic calibration demo
+  - `--calibrate-traces FILE` for calibrating from real GPU traces
+  - `--calibrate-output FILE` for exporting optimized weights
+  - `--calibrate-method alignment|quality` for labeling strategy
+  - `--collect-traces FILE` for recording signal traces during benchmarks
+- [x] **Trace collection in AlignAtt backend**:
+  - `set_trace_collector()` method on SimulMTBackend base class
+  - Wired into fusion border check: records signal scores + fusion diagnostics
+  - `evaluate_backend()` handles sentence start/end for trace lifecycle
+- [x] **OmniSTEval bug fix** (CRITICAL):
+  - `eval_result_to_omnisteval()` returned only last sentence's entries instead of all
+  - Fixed: now returns `all_entries` for multi-sentence evaluations
+  - Strengthened test to verify entries from all sentences are included
+- [x] **OmniSTEval format rewrite** (CRITICAL for competition):
+  - Our JSONL format was WRONG: produced per-emission-event entries, not per-segment
+  - OmniSTEval expects: one line per segment with `prediction`, `delays[]`, `elapsed[]`, `source_length` (all ms)
+  - Added `SimulEvalEntry` dataclass with validation (`len(delays) == len(prediction.split())`)
+  - Added `eval_result_to_simuleval()`: converts word-index delays to milliseconds
+  - `--omnisteval` in bench.py now produces correct SimulEval format (not legacy)
+  - Legacy per-event format kept as `--legacy` option
+  - 18 new tests for SimulEval format
+- [x] 731 unit tests (78 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -402,6 +441,15 @@
 - [ ] **Fusion per direction**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh,en-de,en-it,cs-en --comet --save`
 - [ ] **Fusion + LSG**: `python -m nllw.bench --signal-fusion --lsg-kl 7.0 --shift-k 0.4 --lang en-zh --comet --save`
 - [ ] **GPU experiment runner**: `./scripts/run_experiments.sh 1 --lang en-zh --model /path/to/model.gguf --comet` (Phase 1 validation)
+
+### Calibration experiments (new in iteration 13)
+- [ ] **Collect fusion traces on A40**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save --collect-traces traces_enzh.json`
+- [ ] **Collect traces per direction**: Run with `--collect-traces` for en-zh, en-de, en-it, cs-en
+- [ ] **Calibrate from real traces**: `python -m nllw.bench --calibrate-traces traces_enzh.json --lang en-zh --calibrate-output weights_enzh.json`
+- [ ] **Calibrate all directions**: `python -m nllw.bench --calibrate-traces all_traces.json --lang en-zh,en-de,en-it,cs-en --calibrate-output optimized_weights.json`
+- [ ] **Signal importance analysis**: `python -m nllw.calibrate --traces all_traces.json --analyze --all-directions`
+- [ ] **Compare default vs calibrated weights**: Run fusion benchmark with default weights, then with calibrated weights, compare COMET + latency
+- [ ] **Calibrate with quality labels**: `python -m nllw.bench --calibrate-traces traces.json --calibrate-method quality --lang en-zh`
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 

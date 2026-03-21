@@ -166,6 +166,7 @@ def evaluate_backend(
     compute_xcomet_score: bool = False,
     comet_batch_size: int = 8,
     verbose: bool = True,
+    trace_collector=None,
 ) -> EvalResult:
     """Evaluate a SimulMT backend on a parallel corpus.
 
@@ -175,6 +176,7 @@ def evaluate_backend(
         compute_comet_score: Whether to compute COMET
         compute_xcomet_score: Whether to compute XCOMET-XL
         verbose: Print progress
+        trace_collector: Optional TraceCollector for fusion calibration data
 
     Returns:
         EvalResult with all metrics
@@ -192,6 +194,16 @@ def evaluate_backend(
     for i, item in enumerate(corpus):
         source = item["source"]
         reference = item["reference"]
+
+        # Start trace collection for this sentence
+        if trace_collector is not None:
+            direction = backend.config.direction if hasattr(backend, 'config') else ""
+            trace_collector.start_sentence(
+                sentence_id=item.get("id", i),
+                source=source,
+                reference=reference,
+                direction=direction,
+            )
 
         # Simulate word-by-word
         trace = simulate_backend(backend, source, is_final_on_last=True)
@@ -216,6 +228,10 @@ def evaluate_backend(
                 "max_cw": trace.metrics.max_cw,
             },
         })
+
+        # End trace collection for this sentence
+        if trace_collector is not None:
+            trace_collector.end_sentence(output_text=trace.translation)
 
         # Reset for next sentence
         backend.reset()

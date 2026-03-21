@@ -187,6 +187,8 @@ class AlignAttBackend(SimulMTBackend):
         self._current_attn_shift_write: Optional[bool] = None
         # Attention position history for monotonicity tracking (within generation loop)
         self._gen_positions_history: List[float] = []
+        # Optional trace collector for fusion calibration
+        self._trace_collector = None
 
     def translate(self, source_word: str, is_final: bool = False,
                   emission_time: float = 0.0) -> TranslationStep:
@@ -397,7 +399,7 @@ class AlignAttBackend(SimulMTBackend):
                             if not self.config.attention_shift:
                                 weights.attn_shift = 0.0
 
-                            border_hit, _diag = fused_border_check(
+                            border_hit, fusion_diag = fused_border_check(
                                 src_attn, self._ts_scores,
                                 num_src_tokens, effective_bd,
                                 weights=weights,
@@ -418,6 +420,17 @@ class AlignAttBackend(SimulMTBackend):
                                 attn_shift_write=self._current_attn_shift_write if self.config.attention_shift else None,
                             )
                             self._prev_step_attn = src_attn.copy()
+
+                            # Record signal trace for calibration
+                            if self._trace_collector is not None:
+                                self._trace_collector.record_step(
+                                    source_words_seen=len(self._source_words),
+                                    tokens_generated=n_gen,
+                                    scores=dict(fusion_diag.scores),
+                                    actual_decision=border_hit,
+                                    fusion_score=fusion_diag.fusion_score,
+                                    fusion_threshold=fusion_diag.threshold,
+                                )
 
                         # Use combined check if any multi-signal feature enabled
                         elif (

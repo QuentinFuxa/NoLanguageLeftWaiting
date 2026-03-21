@@ -20,6 +20,7 @@ nllw/
   policies.py          -- Read/write policies (AlignAtt, wait-k, confidence, fixed-rate)
   metrics.py           -- SimulMT latency metrics (AL, LAAL, YAAL, AP, DAL, MaxCW)
   eval.py              -- Evaluation harness (FLORES, XCOMET-XL, parameter sweep)
+  calibrate.py         -- Fusion weight calibration pipeline (trace collection, label generation, grid search)
   heads/               -- Alignment head detection & configs
     detect.py          -- Head detection algorithm (TS scoring via FLORES)
     configs/           -- Pre-computed head configs (JSON) for popular models
@@ -128,7 +129,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~12,000 lines across 27 SimulMT modules, 653 tests
+### What exists now: ~13,000 lines across 28 SimulMT modules, 731 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -142,7 +143,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 **30+ prompt formats:** hymt, qwen3, qwen3.5, qwen3.5-nothink, eurollm, tower, gemma (per-direction)
 
-**12 research tools:**
+**13 research tools:**
 | Module | Lines | Purpose |
 |--------|-------|---------|
 | `eval.py` | 410 | BLEU/COMET/xCOMET-XL evaluation, parameter sweep |
@@ -161,6 +162,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
 | `simulstream.py` | 420 | SimulStream SpeechProcessor wrapper for IWSLT 2026 submission |
 | `fusion.py` | 600 | Weighted signal fusion: 8 signals -> continuous scores -> weighted sum -> border decision |
+| `calibrate.py` | 650 | Fusion weight calibration: trace collection, alignment-based labeling, grid search optimization |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
