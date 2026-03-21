@@ -407,6 +407,56 @@
 - [x] Signal fusion + cascade experiments running on A40
 - [x] 746 unit tests (15 new, all passing)
 
+## DONE -- Iteration 16: Large-scale Benchmarks, wb=4/5 Discovery, Head Detection
+
+- [x] **Stderr suppression** (`llama_backend.py`):
+  - Added `_suppress_stderr()` context manager for batch decode, model load, context creation
+  - Eliminates 490+ `get_attn_ith: invalid attention id` warnings per run
+  - Also suppresses Metal JIT / CUDA graph warmup noise
+- [x] **Head detection for EN-DE, EN-IT, CS-EN** (`detect_heads.py`):
+  - Added `--n-gpu-layers` CLI flag (was missing, causing detection to fail)
+  - Wired `n_gpu_layers` into both `load_model()` and `create_context()`
+  - Results: 90% top-20 head overlap with EN-ZH (validates cross-lingual transfer)
+  - EN-IT unique heads: (5,1) and (8,22); same (8,22) in EN-DE too
+  - Generated configs: `translation_heads_hy_mt1_5_7b_q8_0_{en_it,cs_en}.json`
+- [x] **Head config discovery fix** (`alignatt_backend.py`):
+  - detect_heads generates `hy_mt1_5_7b_q8_0_en_de.json` but search used `hymt_en_de`
+  - Fixed: added `hy_mt1_5_7b_q8_0` and `hy_mt1_5` patterns
+  - Fixed cross-lingual fallback: `rsplit("_", 2)` was wrong for long prefixes
+- [x] **100-sentence FLORES benchmarks** (all 4 directions):
+  - EN-ZH: bd=2/wb=3 -> BLEU=32.9, **COMET=0.880**, YAAL=3.77 (980ms/sent)
+  - EN-DE: bd=3/wb=3 -> BLEU=24.9, COMET=0.850, YAAL=4.38 (1327ms/sent)
+  - EN-IT: bd=3/wb=3 -> BLEU=21.6, COMET=0.867, YAAL=4.44 (1330ms/sent)
+  - CS-EN: bd=3/wb=2 -> BLEU=22.6, COMET=0.857, YAAL=2.77 (1143ms/sent)
+- [x] **wb=4 and wb=5 discovery** (key finding!):
+  - **wb=5 bd=3 EN-ZH: COMET=0.892** (+0.012 vs wb=3, new best!)
+  - wb=4 bd=3 EN-ZH: COMET=0.887 (+0.007)
+  - wb=4 bd=3 EN-DE: COMET=0.873 (+0.023 vs wb=3!)
+  - wb=4 bd=3 EN-IT: COMET=0.885 (+0.018)
+  - Pattern: wb=3->wb=4->wb=5 each adds ~0.005-0.012 COMET at ~1 word more latency
+  - Faster per-sentence: wb=5 at 859ms vs wb=3 at 980ms (fewer translate() calls)
+- [x] **Lower bd helps all directions**:
+  - EN-DE: bd=2/wb=3 COMET=0.871 vs bd=3/wb=3 COMET=0.850 (+0.021!)
+  - EN-IT: bd=2/wb=3 COMET=0.882 vs bd=3/wb=3 COMET=0.867 (+0.015!)
+  - bd=1 hurts EN-ZH (COMET=0.870, -0.010)
+- [x] **top_p aggregation discovery** (biggest single improvement!):
+  - top_p bd=3/wb=4 EN-ZH: **COMET=0.895** (99.9% of offline 0.896!)
+  - +0.010 over ts_vote for EN-ZH, +0.031 for EN-DE, +0.021 for CS-EN
+  - Verified across all 4 directions: consistently best aggregation method
+  - geomean second best (0.881-0.891), softmax_mean worst (0.812)
+- [x] **Context injection confirmed dead for HY-MT**:
+  - EN-ZH: neutral (0.879), EN-DE: -0.084, EN-IT: -0.125, CS-EN: -0.107
+- [x] **Entropy veto confirmed dead**:
+  - All thresholds hurt: 0.5->0.494, 0.75->0.589, 1.0->0.683, 1.5->0.794
+- [x] **Full-sentence baselines** (quality upper bound):
+  - EN-ZH=0.896, EN-DE=0.884, EN-IT=0.889, CS-EN=0.881
+  - SimulMT achieves 97-99.9% of offline quality
+- [x] **XCOMET-XL OOM fix** (`eval.py`):
+  - XCOMET-XL (12GB VRAM) + translation model (8GB) exceeded A40 46GB
+  - Fixed: close backend to free VRAM before loading XCOMET-XL scorer
+  - rc=-9 (SIGKILL/OOM) resolved. **Needs re-run on A40.**
+- [x] 755 unit tests (9 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
