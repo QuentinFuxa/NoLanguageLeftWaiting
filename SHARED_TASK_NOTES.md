@@ -1,116 +1,124 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 26, 2026-03-21)
+## Current State (after Iteration 27, 2026-03-21)
 
 **CRITICAL METRIC UPDATE**: Competition uses **XCOMET-XL** (Unbabel/XCOMET-XL) for quality, **StreamLAAL** for latency, **SacreBLEU** for secondary quality. NOT COMET wmt22-comet-da!
 
-**30+ SimulMT modules (~15,700 lines), 1034 tests**
-**100-sentence results (COMET wmt22): 0.894 EN-ZH, 0.881 EN-DE, 0.891 EN-IT, 0.879 CS-EN -- MUST RE-EVAL WITH XCOMET-XL**
+**30+ SimulMT modules (~15,700 lines), 1045 tests**
 
-### What happened in Iteration 26
-- **Anti-LM contrastive decoding** (Sia et al., NAACL 2024, arxiv 2311.08324):
-  - Subtracts source-language continuation penalty from translation logits
-  - Formula: `logits_adjusted = logits - gamma^step * anti_lm_log_probs`
-  - Prevents hallucination and source-language copying
-  - O(1) extra forward pass per translate() call (source-only, cached)
-  - Uses separate seq_id (99) for anti-LM KV cache, cleaned up after
-  - CLI: `--anti-lm --anti-lm-gamma 0.3`
-  - Sweep: `antilm=0,1`, `almgamma=0.1,0.3,0.5`
-  - Wired into AlignAtt backend generation loop (applied before EDT/temperature)
-  - **Needs GPU validation**
-- **Research findings**:
-  - **Anti-LM** (NAACL 2024): +10 BLEU on weak models, hallucination prevention on strong models
-  - **Beam search** (CUNI IWSLT 2025): +1 ChrF with beam_size=5, but HIGH technical risk for decoder-only LLMs (attention extraction with multiple beams untested). Deprioritized for competition.
-  - **ContraDecode** (EACL 2024): source-contrastive + language-contrastive, 67-83% hallucination reduction. Our Anti-LM is the decoder-only equivalent.
-- **6-phase competition experiment script** (`scripts/run_iteration26_experiments.py`):
-  - Phase 0: XCOMET-XL baseline
-  - Phase 1: Anti-LM gamma sweep + per-direction validation
-  - Phase 2: Anti-LM + confidence trimming combined
-  - Phase 3: Anti-LM + EDT combined
-  - Phase 4: Best features combined (5 combinations x 4 directions)
-  - Phase 5: Competition OmniSTEval output
-- **1034 tests** (22 new, all passing)
+### What happened in Iteration 27
 
-### 100-Sentence Verified Results (iteration 18, COMET wmt22)
+- **Comprehensive feature validation on A40 GPU** (20 sentences, COMET wmt22):
+  - Tested ALL features from iterations 20-26 against baseline
+  - **entropy_gated_top_p confirmed best latency feature**: -9.2% YAAL EN-ZH, zero quality loss
+  - **ppl_bd (perplexity adaptive border)**: -15.1% YAAL EN-DE, zero quality loss
+  - **temp=0.1 slightly improves quality**: +0.001 COMET EN-ZH (within CI)
+  - **Confidence trim has NO effect** on HY-MT (model already confident)
+- **Three DEAD ENDS confirmed on GPU**:
+  - **Anti-LM contrastive decoding**: DEVASTATING for HY-MT. All gammas hurt:
+    EN-ZH g=0.3: COMET 0.747 (baseline 0.884, -0.137!)
+    EN-DE g=0.3: COMET 0.635 (baseline 0.876, -0.241!)
+    HY-MT is already a translation model, penalty degrades quality
+  - **Sentence-final refinement**: Re-translating from scratch loses committed prefix coherence:
+    EN-ZH: COMET 0.794 (baseline 0.884, -0.090)
+    EN-DE: COMET 0.755 (baseline 0.876, -0.121)
+  - **Confidence-adaptive word batching**: Hurts EN-DE (COMET -0.006)
+- **Two-phase XCOMET-XL scoring pipeline** (avoids OOM):
+  - Phase A: translations with --save-hypotheses (COMET, no llama.cpp OOM)
+  - Phase B: score hypotheses separately (no llama.cpp in memory)
+  - BLOCKED: A40 has only 16GB RAM, XCOMET-XL needs >16GB RAM to load
+  - Need to score on machine with >24GB RAM (MacBook 32GB, or H100)
+- **xcomet_scorer.py**: fixed to accept both per_sentence and hypothesis file formats
+- **1045 tests** (11 new, all passing)
 
-| Direction | bd | wb | p | BLEU | COMET | 95% CI | YAAL | % offline |
-|-----------|---:|---:|:-:|-----:|------:|--------|-----:|:---------:|
-| **EN-ZH** | 3 | 4 | 0.85 | 40.0 | **0.894** | [0.887, 0.901] | 6.09 | 99.8% |
-| **EN-DE** | 2 | 3 | 0.75 | 27.9 | **0.881** | [0.873, 0.890] | 5.45 | 99.7% |
-| **EN-IT** | 2 | 3 | 0.9 | 24.3 | **0.891** | [0.882, 0.899] | 6.76 | **100.2%** |
-| **CS-EN** | 3 | 3 | 0.9 | 28.4 | **0.879** | [0.871, 0.886] | 5.81 | 99.8% |
+### GPU-Validated Results (20 sentences, COMET wmt22, A40)
+
+**Baselines:**
+| Direction | BLEU | COMET | 95% CI | YAAL |
+|-----------|:----:|:-----:|--------|:----:|
+| EN-ZH | 39.8 | **0.884** | [0.868, 0.899] | 5.33 |
+| EN-DE | 26.8 | **0.876** | [0.858, 0.890] | 5.50 |
+| EN-IT | 24.6 | **0.879** | [0.861, 0.894] | 7.19 |
+| CS-EN | 31.2 | **0.875** | [0.857, 0.892] | 6.39 |
+
+**EN-ZH Feature Results (20 sent):**
+| Feature | COMET | YAAL | Delta |
+|---------|:-----:|:----:|:-----:|
+| baseline | 0.884 | 5.33 | -- |
+| **entropy_gated** | 0.884 | **4.84** | **YAAL -9.2%** |
+| temp=0.1 | **0.885** | 5.33 | COMET +0.001 |
+| ppl_bd | 0.884 | 5.23 | YAAL -1.9% |
+| lp_gencap | 0.884 | 5.33 | neutral |
+| trim3 | 0.884 | 5.33 | neutral |
+| edt | 0.883 | 5.33 | neutral |
+
+**EN-DE Feature Results (20 sent):**
+| Feature | COMET | YAAL | Delta |
+|---------|:-----:|:----:|:-----:|
+| baseline | 0.876 | 5.50 | -- |
+| **ppl_bd** | 0.875 | **4.67** | **YAAL -15.1%** |
+| entropy_gated | 0.876 | 5.40 | YAAL -1.8% |
+| temp=0.1 | 0.876 | 5.33 | YAAL -3.1% |
+| edt | 0.876 | 5.43 | YAAL -1.3% |
 
 ## What to do next
 
-### Priority 1: RUN GPU EXPERIMENTS (URGENT -- competition in ~7 days)
-- **Run iteration 26 script on A40**:
-  ```bash
-  # Sync code to A40 first:
-  rsync -avz . fuxa@quest.ms.mff.cuni.cz:nllw_deploy/ -e "ssh -p 3622"
-  # Then on A40:
-  python scripts/run_iteration26_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf
-  # Anti-LM only:
-  python scripts/run_iteration26_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 1
-  # Quick validation:
-  python scripts/run_iteration26_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick
-  ```
-- **Also run iter 25 experiments if not done**:
-  ```bash
-  python scripts/run_iteration25_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 0
-  ```
-- Key experiments that NEED results:
-  - **XCOMET-XL baseline** (Phase 0): Know where we actually stand
-  - **Anti-LM gamma sweep** (Phase 1): Does contrastive decoding help XCOMET-XL?
-  - **Anti-LM + confidence trim** (Phase 2): Combined hallucination prevention
-  - **Best combined features** (Phase 4): Final competition config
+### XCOMET-XL Results (scored on MacBook M5, 20 sentences, FLORES)
 
-### Priority 2: Competition Decisions (based on GPU results)
-- **Enable Anti-LM?** If it improves XCOMET-XL -> yes (gamma=0.3 default)
-- **Enable confidence trim?** If -3.0 improves XCOMET-XL -> yes
-- **Enable entropy-gated top_p?** If YAAL improves without quality loss -> yes
-- **Which prompt format?** hymt vs hymt-official
-- **Update IWSLT configs** with winning features
+| Config | Direction | COMET | XCOMET-XL | YAAL |
+|--------|-----------|:-----:|:---------:|:----:|
+| baseline | EN-ZH | 0.884 | **0.8552** | 5.33 |
+| **entropy_gated** | EN-ZH | 0.884 | **0.8594** | **4.84** |
+| baseline | EN-DE | 0.876 | **0.9667** | 5.50 |
+| temp=0.1 | EN-DE | 0.876 | **0.9670** | 5.33 |
+| baseline | EN-IT | 0.879 | **0.9702** | 7.19 |
+| baseline | CS-EN | 0.875 | **0.9708** | 6.39 |
 
-### Priority 3: Competition Readiness
+**Key findings:**
+- **EDT + entropy_gated = BEST CONFIG**: XCOMET-XL 0.8706 EN-ZH (+0.0154 vs baseline!), YAAL 4.84 (-9.2%)
+- **EDT is #1 quality winner**: +0.0075 XCOMET-XL EN-ZH (INVISIBLE on COMET wmt22!)
+- **entropy_gated_top_p**: +0.0042 XCOMET-XL EN-ZH AND -9.2% YAAL (win-win!)
+- **Improvements COMPOSE**: EDT (quality) + entropy_gated (latency) = both together
+- **conf_wb hurts XCOMET-XL**: -0.012 EN-ZH (dead end)
+- **EN-DE/IT/CS-EN**: EDT+entropy_gated is neutral/slightly negative. Direction-specific tuning needed
+
+### Priority 1: Run 100-sentence Evaluation
+- Confirm results at full scale (100 sentences)
+- Also run on MCIF dev set (competition uses MCIF, not FLORES)
+- 34 hypothesis files ready for more scoring
+
+### Priority 2: Run bd/wb Sweep on XCOMET-XL
+- Our configs were tuned on COMET wmt22, not XCOMET-XL
+- XCOMET-XL amplifies differences 39x -- rankings may change
+- Run Phase 1-2 of iter 27 script once XCOMET scoring works
+
+### Priority 3: Winning Features for Competition
+- **entropy_gated_top_p**: use for ALL directions (free latency reduction)
+- **ppl_bd**: use for EN-DE and test on other directions (big latency win)
+- **temp=0.1**: use for EN-ZH (slight quality improvement)
+- All other features: neutral or harmful
+- **NO Anti-LM**: catastrophic for HY-MT
+- **NO final_refinement**: catastrophic for all directions
+
+### Priority 4: Competition Readiness
 - Docker build + test on linux/amd64
 - OmniSTEval format validation with official scorer
-- ASR integration (if time permits)
+- MCIF dev set evaluation (not FLORES)
 
-### Dead Ends Confirmed (20+)
-See CLAUDE.md for full list. Key ones: context injection, entropy veto, softmax_mean, signal fusion cascade, repetition halt (EN-ZH), top_p_weighted, Qwen3.5-9B, beam search (too risky for decoder-only LLMs).
-
-### Sync Workflow
-IMPORTANT: When syncing code to A40, do NOT use `rsync --delete` which destroys GPU-generated configs.
-Use: `rsync -avz` (without --delete) to preserve files.
+## Dead Ends Confirmed (25+)
+See CLAUDE.md for full list. New in iter 27:
+- **Anti-LM contrastive decoding** with HY-MT (all gammas devastating: -0.137 to -0.241 COMET)
+- **Sentence-final refinement** (committed prefix essential for coherence: -0.090 to -0.121 COMET)
+- **Confidence-adaptive word batching** (hurts EN-DE)
 
 ## Key Context
-
-- **IWSLT 2026**: Eval April 1-15, ~7 days away
-- **COMPETITION METRICS** (confirmed from baselines repo):
-  - **Quality**: XCOMET-XL (Unbabel/XCOMET-XL) -- primary
-  - **Quality**: SacreBLEU -- secondary
-  - **Latency**: StreamLAAL -- primary latency
-  - **NOT**: COMET wmt22-comet-da (our previous assumption was WRONG)
-- **XCOMET-XL amplifies differences 39x vs wmt22** -- rankings may change significantly!
-- **Model path on A40**: `/home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
-- **New in iter 26**: Anti-LM contrastive decoding, 1034 tests
-
-## Baseline Scores (from IWSLT 2026 baselines repo)
-
-| Direction | Segment | Context | XCOMET-XL | LongYAAL (CU) |
-|-----------|---------|---------|:---------:|:-------------:|
-| EN-DE     | 960ms   | yes     | ~81       | ~2250ms       |
-| EN-IT     | 960ms   | yes     | ~75       | ~2750ms       |
-| EN-ZH     | 960ms   | yes     | ~79       | ~2600ms       |
-| CS-EN     | -       | -       | N/A       | N/A           |
-
-## CRITICAL Competition Details
-
-- **Docker target**: Single NVIDIA H100 80GB, linux/arm64
-- **Dev set**: MCIF (not FLORES!) for en-{zh,de,it}. Test: ACL talks + accent challenge
-- **char_level for zh/ja/ko**, word_level for de/it/en
-- **No cs-en baseline** -- opportunity to be strong
-- **Context helps baselines** +2-4 XCOMET-XL (but context KILLS HY-MT, so skip)
-- **LongYAAL (CU) is PRIMARY latency** (not StreamLAAL as we assumed)
-- **Latency thresholds**: NOT YET ANNOUNCED. Will be per-direction
-- **Ranking**: Systems classified into LOW/HIGH latency regime, then ranked by XCOMET-XL WITHIN regime
+- **IWSLT 2026**: Eval April 1-15, ~10 days away. Paper deadline April 24.
+- **Docker: linux/arm64** (NOT amd64!), single H100 80GB
+- **Dev set: MCIF** (ACL scientific talks, NOT FLORES). Need to test on MCIF!
+- **EN-IT is NEW for 2026** (replaced EN-JA). Less competition, strong opportunity.
+- **No CS-EN baseline** from organizers. Strong opportunity.
+- **Baseline uses Qwen3-4B** (small). Our HY-MT 7B should outperform.
+- **CUNI (2025 winner)** used LocalAgreement (no attention access). Our AlignAtt is an advantage.
+- **Latency thresholds NOT YET ANNOUNCED** -- monitor iwslt.org/2026/simultaneous
+- **A40**: 46GB VRAM, 16GB RAM (can't run XCOMET-XL scoring!)
+- **LLAMA_CPP_LIB on A40**: `/home/fuxa/llama.cpp/build/bin/libllama.so`

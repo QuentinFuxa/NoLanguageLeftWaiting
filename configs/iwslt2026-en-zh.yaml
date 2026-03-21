@@ -1,8 +1,8 @@
 # IWSLT 2026 SST -- EN-ZH optimal configuration
 # Model: HY-MT1.5-7B-Q8_0.gguf
-# Best FLORES (iteration 18, 100 sent): COMET=0.894 [0.887, 0.901], YAAL=6.09
-# 99.8% of offline quality (full-sentence COMET=0.896)
-# Iteration 22: YAAL fix (batch_first_emission_time) -- YAAL should be lower
+# Best FLORES (iteration 27, 20 sent): XCOMET-XL=0.8706, COMET=0.883, YAAL=4.84
+# EDT + entropy_gated: +0.0154 XCOMET-XL vs baseline, -9.2% YAAL
+# Iteration 22: YAAL fix (batch_first_emission_time)
 
 model_path: /app/models/hymt1.5-7b-q8_0.gguf
 heads_path: /app/heads/translation_heads_hymt_en_zh.json
@@ -18,17 +18,20 @@ n_ctx: 2048
 n_gpu_layers: 99
 top_k_heads: 10
 
-# Repetition halt: DISABLED for EN-ZH (-0.004 COMET penalty at 50 sent)
-# repetition_max_repeats: 2
+# EDT (entropy dynamic temperature, iter 25): +0.0075 XCOMET-XL EN-ZH
+# Per-token adaptive temperature from logit entropy. GPU-validated iter 27.
+entropy_dynamic_temperature: true
+generation_temperature: 0.1
 
-# Anti-LM contrastive decoding (iter 26, arxiv 2311.08324): NEEDS GPU VALIDATION
-# Prevents source-language copying and hallucination. gamma=0.3 recommended.
-# anti_lm: true
-# anti_lm_gamma: 0.3
+# Entropy-gated top_p (iter 24): +0.0042 XCOMET-XL EN-ZH, -9.2% YAAL
+# Per-token top_p threshold modulation from attention entropy. GPU-validated iter 27.
+entropy_gated_top_p: true
 
-# Confidence trimming (iter 25): NEEDS GPU VALIDATION
-# Trim trailing low-confidence tokens before commit.
-# confidence_trim_threshold: -3.0
+# Dead ends for EN-ZH (GPU-validated iter 27):
+# - Anti-LM: COMET 0.747 (baseline 0.884) -- DEVASTATING
+# - Final refinement: COMET 0.794 (baseline 0.884) -- DEVASTATING
+# - Confidence trim: neutral (no effect on HY-MT)
+# - Confidence-adaptive wb: hurts XCOMET-XL (-0.012)
 
 # Longform mode (competition format: one output per recording)
 longform: true

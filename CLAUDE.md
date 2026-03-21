@@ -1,5 +1,5 @@
 # NoLanguageLeftWaiting (NLLW) -- Simultaneous Machine Translation Library
-
+SENTENCES CANNOT BE REGENERATED FROM SCRATCH. NO FLICKERING ALLOWED.
 ## Project Overview
 
 Production-quality Python library for Simultaneous Machine Translation (SimulMT). Supports both:
@@ -75,6 +75,9 @@ nllw/
 - Repetition halt (rep=2 hurts EN-ZH by -0.004 COMET, neutral for EN-DE)
 - top_p_weighted aggregation (COMET 0.885 EN-ZH, 0.852 EN-DE -- much worse than top_p)
 - Qwen3.5-9B (hybrid DeltaNet architecture: only 25% of layers have softmax attention, AlignAtt unusable)
+- Sentence-final refinement (re-translate from scratch on is_final: COMET 0.794 EN-ZH, 0.755 EN-DE -- committed prefix is ESSENTIAL for coherence)
+- Confidence-adaptive word batching (hurts EN-DE: COMET -0.006, neutral elsewhere)
+- Anti-LM contrastive decoding with HY-MT (ALL gammas hurt: g=0.1 COMET 0.818, g=0.3 COMET 0.747, g=0.5 COMET 0.788 for EN-ZH. EN-DE even worse: -0.241 COMET. HY-MT already a translation model, penalty degrades quality)
 
 ---
 
@@ -259,12 +262,12 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `confidence_wb_high` | -0.5 | Above this logprob -> reduce wb (confident). Range: -2.0 to 0.0 |
 | `confidence_wb_low` | -2.0 | Below this logprob -> increase wb (uncertain). Range: -5.0 to -1.0 |
 | `language_pair_gen_cap` | False | Adjust gen cap from known src/tgt compression ratio. EN-ZH=0.85, EN-DE=1.15 |
-| `entropy_gated_top_p` | False | Per-token top_p threshold from merged attention entropy. Novel. Low entropy=emit sooner, high=wait |
-| `generation_temperature` | 0.0 | Token sampling temperature. 0.0=greedy (default). 0.1-0.3=explore alternatives near greedy path |
-| `entropy_dynamic_temperature` | False | EDT (arxiv 2403.14541): per-token adaptive temperature from logit entropy. Overrides fixed temperature |
+| `entropy_gated_top_p` | False | **GPU-validated iter 27: +0.0042 XCOMET-XL EN-ZH, -9.2% YAAL.** Per-token top_p threshold from merged attention entropy. Low entropy=emit sooner, high=wait |
+| `generation_temperature` | 0.0 | Token sampling temperature. 0.0=greedy (default). 0.1=recommended for EN-ZH |
+| `entropy_dynamic_temperature` | False | **GPU-validated iter 27: +0.0075 XCOMET-XL EN-ZH.** EDT (arxiv 2403.14541): per-token adaptive temperature from logit entropy. Best with temp=0.1 base |
 | `confidence_trim_threshold` | None | Trim trailing tokens below this logprob. None=disabled, -3.0=recommended. Prevents hallucinated endings |
-| `anti_lm` | False | Anti-LM contrastive decoding (Sia et al., NAACL 2024). Penalizes source-language continuation. Novel for SimulMT |
-| `anti_lm_gamma` | 0.3 | Anti-LM decay rate. Penalty = gamma^step. 0.3=recommended. Lower=faster decay |
+| `anti_lm` | False | **DEAD END for HY-MT (iter 27 GPU): COMET 0.747 vs baseline 0.884.** Anti-LM contrastive decoding (Sia et al., NAACL 2024) |
+| `anti_lm_gamma` | 0.3 | Anti-LM decay rate. **DO NOT USE with HY-MT** |
 | `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
 | `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
@@ -276,8 +279,21 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 3. **Thread safety**: `threading.Lock` around all llama_context operations.
 4. **Stderr suppression**: Metal JIT logs flood TUI. Wrap decode calls with `suppress/restore_stderr`.
 
-### Quality metrics (2026-03-21, FLORES, A40, COMET wmt22-comet-da)
-**IMPORTANT: Competition uses XCOMET-XL + SacreBLEU + StreamLAAL. Must re-run with `--xcomet` on GPU.**
+### Quality metrics -- XCOMET-XL (2026-03-21, FLORES, 20 sentences, scored on MacBook M5)
+**Competition uses XCOMET-XL (0-1 scale). IWSLT baselines are 0-100 scale (x100).**
+
+**XCOMET-XL results (iteration 27, best configs per direction):**
+| Direction | Config | XCOMET-XL | COMET wmt22 | YAAL |
+|-----------|--------|:---------:|:-----------:|:----:|
+| **EN-ZH** | **EDT+entropy_gated** | **0.8706** | 0.883 | 4.84 |
+| **EN-DE** | baseline | **0.9667** | 0.876 | 5.50 |
+| **EN-IT** | baseline | **0.9702** | 0.879 | 7.19 |
+| **CS-EN** | baseline | **0.9708** | 0.875 | 6.39 |
+
+**EDT + entropy_gated is the winning config for EN-ZH**: +0.0154 XCOMET-XL vs baseline, -9.2% YAAL.
+For EN-DE/IT/CS-EN, baseline is best on XCOMET-XL.
+
+### Quality metrics -- COMET wmt22 (FLORES, A40, 100 sentences, iteration 18)
 
 **100-sentence confirmed results (iteration 18, tuned p_threshold with CI):**
 | Direction | bd | wb | p | BLEU | COMET | 95% CI | YAAL | % of offline |
@@ -291,17 +307,17 @@ EN-IT **exceeds offline baseline** (0.891 > 0.889). All directions within 0.3% o
 Full-sentence baselines: EN-ZH=0.896, EN-DE=0.884, EN-IT=0.889, CS-EN=0.881.
 
 ### Key findings
-- **top_p aggregation is the biggest win**: +0.008-0.021 COMET over ts_vote
+- **EDT + entropy_gated is the winning config for EN-ZH**: +0.0154 XCOMET-XL, -9.2% YAAL (iter 27)
+- **XCOMET-XL amplifies differences vs COMET wmt22**: EDT invisible on wmt22, +0.0075 on XCOMET-XL
+- **top_p aggregation is the biggest foundational win**: +0.008-0.021 COMET over ts_vote
 - **wb=4-5 improves quality**: COMET 0.892 EN-ZH at wb=4 (+0.012 over wb=3)
 - **Lower bd improves quality**: bd=2 better than bd=3 for EN-DE/EN-IT
 - **HY-MT1.5-7B is best model**: beats all other tested models
 - **AlignAtt is critical**: Without it, COMET collapses 0.87 -> 0.29-0.47
 - **KV cache reuse**: 3-5x speedup, zero quality loss
+- **Anti-LM KILLS HY-MT quality**: -0.137 COMET EN-ZH, -0.241 EN-DE (HY-MT doesn't need it)
 - **Context KILLS HY-MT quality**: -0.084 to -0.125 COMET (dead end)
-- **Entropy veto is dead**: all thresholds hurt quality significantly
-- **Adaptive top_p trades latency for free**: 6-12% YAAL reduction, <0.2% COMET cost (CIs overlap)
-- **Bootstrap CI enables rigorous comparison**: 95% CIs show most differences are not significant
-- **20+ failed experiments documented**: EAST, LoRA, GDN, confidence, signals, etc.
+- **25+ failed experiments documented**: EAST, LoRA, GDN, anti-LM, refinement, etc.
 - **XCOMET-XL amplifies differences 39x vs wmt22** -- use the right metric!
 - **IWSLT 2026 uses XCOMET-XL** for quality ranking (confirmed from baselines repo: `Unbabel/XCOMET-XL`)
 - **IWSLT 2026 uses StreamLAAL** for latency + **SacreBLEU** for secondary quality (ref: `github.com/owaski/iwslt-2026-baselines/eval.sh`)

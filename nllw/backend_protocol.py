@@ -261,6 +261,15 @@ class BackendConfig:
     # generated token, decays exponentially). 0.3 recommended by Sia et al.
     # Lower values = faster decay. Range: 0.1-1.0.
     anti_lm_gamma: float = 0.3
+    # Sentence-final refinement (novel): when is_final=True, discard partial
+    # translations and regenerate from scratch with full source. During SimulMT,
+    # partial translations committed word-by-word may lock in suboptimal prefixes.
+    # Refinement re-translates the full sentence without this constraint, yielding
+    # quality closer to the full-sentence baseline while keeping SimulMT latency
+    # for intermediate steps. Only affects the FINAL output per segment.
+    # False=disabled (continue from committed prefix, default).
+    # True=re-translate from scratch on is_final.
+    final_refinement: bool = False
     # GPU offloading: number of layers to offload. 0=CPU, 99=all layers.
     n_gpu_layers: int = 0
 

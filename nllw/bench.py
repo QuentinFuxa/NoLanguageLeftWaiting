@@ -95,6 +95,7 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "conftrim": "confidence_trim_threshold",
         "antilm": "anti_lm",
         "almgamma": "anti_lm_gamma",
+        "refine": "final_refinement",
     }
 
     grid = {}
@@ -177,6 +178,7 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "confidence_trim_threshold": args.confidence_trim,
         "anti_lm": args.anti_lm,
         "anti_lm_gamma": args.anti_lm_gamma,
+        "final_refinement": args.final_refinement,
     }
 
 
@@ -492,6 +494,8 @@ def main():
                         help="Anti-LM contrastive decoding: penalize source-language continuation (arxiv 2311.08324)")
     parser.add_argument("--anti-lm-gamma", type=float, default=0.3,
                         help="Anti-LM decay rate (0.3=recommended). Penalty = gamma^step.")
+    parser.add_argument("--final-refinement", action="store_true",
+                        help="Re-translate from scratch on is_final for better quality (novel)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")
