@@ -46,6 +46,8 @@ from .alignatt import (
     compute_attention_shift,
     compute_dynamic_word_batch,
     confidence_adaptive_word_batch,
+    entropy_gated_top_p_threshold,
+    merged_attention_entropy,
     should_defer_batch,
     compute_entropy,
     compute_entropy_change,
@@ -243,7 +245,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._n_heads = top_k
 
         # Prompt format
-        model_family = detect_model_family(config.model_path)
+        model_family = config.prompt_format or detect_model_family(config.model_path)
         self._prompt_fmt = get_prompt_format(model_family, config.direction)
 
         # Initialize llama.cpp
@@ -439,8 +441,16 @@ class AlignAttLABackend(SimulMTBackend):
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
-        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability, coverage, monotonicity, attention shift, fusion)."""
+        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability, coverage, monotonicity, attention shift, fusion, entropy-gated top_p)."""
         bd = getattr(self, '_effective_bd', self.config.border_distance)
+
+        # Entropy-gated top_p: per-token threshold adjustment
+        base_top_p = getattr(self, '_effective_top_p', self.config.top_p_threshold)
+        if (self.config.entropy_gated_top_p
+                and self.config.aggregation in ("top_p", "top_p_weighted")):
+            m_ent = merged_attention_entropy(src_attn, self._ts_scores)
+            base_top_p = entropy_gated_top_p_threshold(base_top_p, m_ent)
+        self._step_top_p = base_top_p
 
         # Signal fusion mode: weighted scoring replaces boolean cascade
         if self.config.signal_fusion:
@@ -528,7 +538,7 @@ class AlignAttLABackend(SimulMTBackend):
                 positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
                 monotonicity_enabled=self.config.attention_monotonicity,
                 attn_shift_write=getattr(self, '_current_attn_shift_write', None) if self.config.attention_shift else None,
-                top_p_threshold=getattr(self, '_effective_top_p', self.config.top_p_threshold),
+                top_p_threshold=getattr(self, '_step_top_p', self.config.top_p_threshold),
             )
             self._prev_step_attn = src_attn.copy()
             return hit
@@ -541,7 +551,7 @@ class AlignAttLABackend(SimulMTBackend):
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
                 head_temp_reference=self.config.head_temp_reference,
-                top_p_threshold=getattr(self, '_effective_top_p', self.config.top_p_threshold),
+                top_p_threshold=getattr(self, '_step_top_p', self.config.top_p_threshold),
             )
         else:
             return check_border(
@@ -551,7 +561,7 @@ class AlignAttLABackend(SimulMTBackend):
                 adaptive_aggregation=self.config.adaptive_aggregation,
                 head_temp_normalize=self.config.head_temp_normalize,
                 head_temp_reference=self.config.head_temp_reference,
-                top_p_threshold=getattr(self, '_effective_top_p', self.config.top_p_threshold),
+                top_p_threshold=getattr(self, '_step_top_p', self.config.top_p_threshold),
             )
 
     def _lsg_probe(self, last_token: int, pos: int,

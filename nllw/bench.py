@@ -57,6 +57,7 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "agg": "aggregation",
         "topp": "top_p_threshold",
         "adaptp": "adaptive_top_p",
+        "entgtp": "entropy_gated_top_p",
         "pplbd": "perplexity_adaptive_bd",
         "ppllow": "perplexity_bd_low",
         "pplhigh": "perplexity_bd_high",
@@ -127,12 +128,14 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "word_batch": args.word_batch,
         "context_sentences": args.context_sentences,
         "target_lang": tgt_lang,
+        "prompt_format": args.prompt_format or "hymt",
         "n_ctx": args.n_ctx,
         "wait_k": args.wait_k,
         "entropy_veto_threshold": args.entropy_threshold,
         "aggregation": args.aggregation,
         "top_p_threshold": args.top_p_threshold,
         "adaptive_top_p": args.adaptive_top_p,
+        "entropy_gated_top_p": args.entropy_gated_top_p,
         "perplexity_adaptive_bd": args.perplexity_adaptive_bd,
         "perplexity_bd_low": args.perplexity_bd_low,
         "perplexity_bd_high": args.perplexity_bd_high,
@@ -244,15 +247,16 @@ def run_comparison(args):
 
     # Print comparison table
     print("\n=== Comparison ===")
-    header = f"{'Backend':<20} {'BLEU':>6} {'COMET':>7} {'LongYAAL':>9} {'YAAL':>6} {'AP':>6} {'ms/sent':>8}"
+    header = f"{'Backend':<20} {'BLEU':>6} {'COMET':>7} {'XCOMET':>7} {'StreamLAAL':>10} {'YAAL':>6} {'AP':>6} {'ms/sent':>8}"
     print(header)
     print("-" * len(header))
     for r in results:
         comet_str = f"{r.comet:.3f}" if r.comet else "  -  "
+        xcomet_str = f"{r.xcomet:.3f}" if r.xcomet else "  -  "
         bleu_str = f"{r.bleu:.1f}" if r.bleu else "  -  "
         print(
-            f"{r.backend_type:<20} {bleu_str:>6} {comet_str:>7} "
-            f"{r.avg_longyaal:>9.2f} {r.avg_yaal:>6.2f} {r.avg_ap:>6.3f} "
+            f"{r.backend_type:<20} {bleu_str:>6} {comet_str:>7} {xcomet_str:>7} "
+            f"{r.avg_stream_laal:>10.2f} {r.avg_yaal:>6.2f} {r.avg_ap:>6.3f} "
             f"{r.avg_time_per_sentence_ms:>8.0f}"
         )
 
@@ -283,14 +287,15 @@ def run_sweep(args):
     # Print results table
     param_keys = list(param_grid.keys())
     print(f"\n=== Sweep Results ({len(results)} configs) ===")
-    header = "  ".join(f"{k:>6}" for k in param_keys) + f" {'BLEU':>6} {'COMET':>7} {'LongYAAL':>9} {'YAAL':>6}"
+    header = "  ".join(f"{k:>6}" for k in param_keys) + f" {'BLEU':>6} {'COMET':>7} {'XCOMET':>7} {'StreamLAAL':>10} {'YAAL':>6}"
     print(header)
     print("-" * len(header))
     for r in results:
         params = "  ".join(f"{r.config.get(k, '-'):>6}" for k in param_keys)
         comet_str = f"{r.comet:.3f}" if r.comet else "  -  "
+        xcomet_str = f"{r.xcomet:.3f}" if r.xcomet else "  -  "
         bleu_str = f"{r.bleu:.1f}" if r.bleu else "  -  "
-        print(f"{params} {bleu_str:>6} {comet_str:>7} {r.avg_longyaal:>9.2f} {r.avg_yaal:>6.2f}")
+        print(f"{params} {bleu_str:>6} {comet_str:>7} {xcomet_str:>7} {r.avg_stream_laal:>10.2f} {r.avg_yaal:>6.2f}")
 
     return results
 
@@ -391,6 +396,8 @@ def main():
     parser.add_argument("--wait-k", type=int, default=5, help="Wait-k words (for wait-k backend)")
     parser.add_argument("--entropy-threshold", type=float, default=None,
                         help="Entropy veto threshold (None=disabled)")
+    parser.add_argument("--prompt-format", default=None,
+                        help="Override prompt format (e.g. hymt-official). Auto-detected from model if not set.")
     parser.add_argument("--aggregation", default="ts_vote",
                         choices=["ts_vote", "softmax_mean", "entropy_weighted",
                                  "consensus", "geomean", "top_p", "top_p_weighted",
@@ -401,6 +408,8 @@ def main():
                         help="Cumulative mass threshold for top_p aggregation (0.5-0.95)")
     parser.add_argument("--adaptive-top-p", action="store_true",
                         help="Adaptive top_p threshold per sentence based on source complexity")
+    parser.add_argument("--entropy-gated-top-p", action="store_true",
+                        help="Per-token top_p threshold modulation from attention entropy (novel)")
     parser.add_argument("--perplexity-adaptive-bd", action="store_true",
                         help="Perplexity-based adaptive border (Hibiki-inspired): adjust bd from generation confidence")
     parser.add_argument("--perplexity-bd-low", type=float, default=2.0,

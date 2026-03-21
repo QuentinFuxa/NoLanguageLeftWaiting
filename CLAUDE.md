@@ -39,6 +39,7 @@ nllw/
 ### Best Known Results
 
 **NLLW results (COMET wmt22-comet-da, FLORES, 100 sentences, A40, iteration 18):**
+**NOTE: Competition uses XCOMET-XL (Unbabel/XCOMET-XL), not wmt22-comet-da! Need to re-evaluate.**
 
 | Direction | Model | COMET | 95% CI | YAAL | Config | % offline |
 |-----------|-------|:-----:|--------|:----:|--------|:---------:|
@@ -85,6 +86,8 @@ nllw/
 | **L4_1** ($0.5/hr) | Cheap experiments, 7B models |
 | **L4_2** ($0.5/hr) | Parallel experiments |
 | **MacBook M5** (local) | Research, GGUF experiments, development |
+
+**Note**: Use L4 machines more often for parallel experiments! L4 can run XCOMET-XL scoring (12GB VRAM fits in L4 24GB).
 
 SSH details: see iwslt26-sst CLAUDE.md.
 
@@ -147,7 +150,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~15,500 lines across 30 SimulMT modules, 955 tests
+### What exists now: ~15,700 lines across 30 SimulMT modules, 974 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -256,6 +259,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `confidence_wb_high` | -0.5 | Above this logprob -> reduce wb (confident). Range: -2.0 to 0.0 |
 | `confidence_wb_low` | -2.0 | Below this logprob -> increase wb (uncertain). Range: -5.0 to -1.0 |
 | `language_pair_gen_cap` | False | Adjust gen cap from known src/tgt compression ratio. EN-ZH=0.85, EN-DE=1.15 |
+| `entropy_gated_top_p` | False | Per-token top_p threshold from merged attention entropy. Novel. Low entropy=emit sooner, high=wait |
 | `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
 | `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
@@ -268,6 +272,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 4. **Stderr suppression**: Metal JIT logs flood TUI. Wrap decode calls with `suppress/restore_stderr`.
 
 ### Quality metrics (2026-03-21, FLORES, A40, COMET wmt22-comet-da)
+**IMPORTANT: Competition uses XCOMET-XL + SacreBLEU + StreamLAAL. Must re-run with `--xcomet` on GPU.**
 
 **100-sentence confirmed results (iteration 18, tuned p_threshold with CI):**
 | Direction | bd | wb | p | BLEU | COMET | 95% CI | YAAL | % of offline |
@@ -293,7 +298,9 @@ Full-sentence baselines: EN-ZH=0.896, EN-DE=0.884, EN-IT=0.889, CS-EN=0.881.
 - **Bootstrap CI enables rigorous comparison**: 95% CIs show most differences are not significant
 - **20+ failed experiments documented**: EAST, LoRA, GDN, confidence, signals, etc.
 - **XCOMET-XL amplifies differences 39x vs wmt22** -- use the right metric!
-- **IWSLT 2026 uses COMET wmt22-comet-da** for ranking (confirmed from shared task page)
+- **IWSLT 2026 uses XCOMET-XL** for quality ranking (confirmed from baselines repo: `Unbabel/XCOMET-XL`)
+- **IWSLT 2026 uses StreamLAAL** for latency + **SacreBLEU** for secondary quality (ref: `github.com/owaski/iwslt-2026-baselines/eval.sh`)
+- **Previous assumption (COMET wmt22-comet-da) was WRONG** -- must re-evaluate with XCOMET-XL on GPU
 
 ---
 

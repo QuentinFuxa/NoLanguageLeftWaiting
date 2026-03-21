@@ -2,6 +2,8 @@
 
 ## Status: Active Development (2026-03-20)
 
+[ ] Check https://github.com/owaski/iwslt-2026-baselines , see we have to use XCOMET-XL pour la qualité, avec SacreBLEU et StreamLAAL pour la latence !!!!! replace where it matters !!!!
+
 ---
 
 ## DONE -- Core Infrastructure (Iteration 1)
@@ -734,6 +736,47 @@
   - Phase 8: Competition OmniSTEval output (100 sent)
 - [x] 955 unit tests (25 new, all passing)
 
+## DONE -- Iteration 24: Entropy-Gated top_p
+
+- [x] **Entropy-gated top_p** (`entropy_gated_top_p` config, `--entropy-gated-top-p` CLI):
+  - Novel: no published work on per-token top_p threshold modulation from attention entropy for SimulMT
+  - Computes entropy of the TS-weighted MERGED attention distribution during generation
+  - Focused attention (low entropy < 1.0 nats) -> scale threshold DOWN by 12% -> emit sooner (lower YAAL)
+  - Spread attention (high entropy > 2.5 nats) -> scale threshold UP by 8% -> wait longer (better quality)
+  - Linear interpolation between entropy thresholds for smooth modulation
+  - Different from adaptive_top_p (per-sentence, source complexity) and entropy_veto (halts generation, dead end)
+  - This is PER-TOKEN within the generation loop, not per-sentence
+  - Only active when aggregation is "top_p" or "top_p_weighted"
+  - `merged_attention_entropy()`: computes merged distribution entropy (vs attention_entropy which averages per-head)
+  - `entropy_gated_top_p_threshold()`: maps entropy to threshold scale with linear interpolation + clamping [0.5, 0.99]
+  - Wired into both AlignAtt and AlignAtt-LA backends
+  - CLI: `--entropy-gated-top-p`
+  - Sweep: `entgtp=0,1`
+  - **Needs GPU validation**
+- [x] **9-phase GPU experiment script** (`scripts/run_iteration24_experiments.py`):
+  - Phase 1: Baseline validation (20 sent)
+  - Phase 2: Entropy-gated top_p vs baseline (100 sent, all 4 dirs)
+  - Phase 3: Entropy-gated + adaptive top_p combined (100 sent)
+  - Phase 4: Confidence-adaptive wb sweep (100 sent, iter 23 validation)
+  - Phase 5: Language-pair gen cap (100 sent, iter 23 validation)
+  - Phase 6: Source-aware batching (100 sent, iter 21 validation)
+  - Phase 7: Perplexity adaptive bd (100 sent, iter 20 validation)
+  - Phase 8: Combined best features (8 combinations, all 4 dirs)
+  - Phase 9: Competition OmniSTEval output (100 sent)
+- [x] 974 unit tests (19 new, all passing)
+- [x] **Official HY-MT prompt format** (`hymt-official` prompt_format):
+  - Matches exact training data wording: "Translate the following segment into {lang}, without additional explanation."
+  - Current NLLW format uses "text" not "segment", extra "please only output" instruction, colon not period
+  - No context injection (confirmed dead end for HY-MT: -0.084 to -0.125 COMET)
+  - CLI: `--prompt-format hymt-official`
+  - A/B test added to Phase 0 of experiment script
+  - **Needs GPU validation** to compare vs current format
+- [x] **Competition metrics corrected**:
+  - Quality: **XCOMET-XL** (Unbabel/XCOMET-XL), NOT COMET wmt22-comet-da
+  - Latency: **StreamLAAL**, secondary: SacreBLEU
+  - bench.py output updated with XCOMET-XL + StreamLAAL columns
+  - Phase 0 in experiment script: XCOMET-XL baseline + prompt A/B test
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -858,6 +901,18 @@
 - [ ] **Run full experiment script on A40**: `python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
 - [ ] **Quick validation**: `python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick`
 - [ ] **Phase 3 only (confidence wb)**: `python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 3`
+
+### Entropy-gated top_p experiments (new in iteration 24)
+- [ ] **Entropy-gated top_p basic test**: `python -m nllw.bench --entropy-gated-top-p --lang en-zh --comet --save` vs baseline
+- [ ] **Entropy-gated top_p per direction**: `python -m nllw.bench --entropy-gated-top-p --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Entropy-gated + adaptive top_p**: `python -m nllw.bench --entropy-gated-top-p --adaptive-top-p --lang en-zh --comet --save`
+- [ ] **Entropy-gated + confidence wb**: `python -m nllw.bench --entropy-gated-top-p --confidence-adaptive-wb --lang en-zh --comet --save`
+- [ ] **All latency features**: `python -m nllw.bench --entropy-gated-top-p --adaptive-top-p --confidence-adaptive-wb --lang en-zh --comet --save`
+
+### Iteration 24 full experiment suite
+- [ ] **Run full experiment script on A40**: `python scripts/run_iteration24_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
+- [ ] **Quick validation**: `python scripts/run_iteration24_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick`
+- [ ] **Phase 2 only (entropy-gated)**: `python scripts/run_iteration24_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 2`
 
 ### Calibration experiments (new in iteration 13)
 - [ ] **Collect fusion traces on A40**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save --collect-traces traces_enzh.json`
