@@ -45,6 +45,7 @@ from .alignatt import (
     check_border_dynamic,
     compute_attention_shift,
     compute_dynamic_word_batch,
+    confidence_adaptive_word_batch,
     should_defer_batch,
     compute_entropy,
     compute_entropy_change,
@@ -280,6 +281,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._batch_counter = 0
         self._batch_first_emission_time: Optional[float] = None  # For LongYAAL
         self._defer_counter = 0  # For source-aware batching
+        self._prev_avg_logprob: Optional[float] = None  # For confidence-adaptive wb
 
         # Revision history for NE metric computation
         self._revision_history: List[List[int]] = []
@@ -342,6 +344,15 @@ class AlignAttLABackend(SimulMTBackend):
                     effective_wb, len(self._source_words)
                 )
 
+            # Confidence-adaptive word batching (applied on top of dynamic wb)
+            if self.config.confidence_adaptive_wb:
+                effective_wb = confidence_adaptive_word_batch(
+                    effective_wb,
+                    self._prev_avg_logprob,
+                    high_threshold=self.config.confidence_wb_high,
+                    low_threshold=self.config.confidence_wb_low,
+                )
+
             # Word batching
             should_skip = self._batch_counter < effective_wb
             if not should_skip and not is_final and self.config.source_aware_batching:
@@ -387,6 +398,28 @@ class AlignAttLABackend(SimulMTBackend):
 
             elapsed_ms = (time.time() - t0) * 1000
 
+            # Compute avg_logprob from last token's logits (quality diagnostic)
+            avg_logprob = None
+            if new_full_ids and self._ctx is not None:
+                logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                if logits is not None:
+                    logits_stable = logits - np.max(logits)
+                    log_probs = logits_stable - np.log(
+                        np.sum(np.exp(logits_stable))
+                    )
+                    # Use last few generated tokens for avg logprob
+                    sample_ids = new_full_ids[-3:] if len(new_full_ids) >= 3 else new_full_ids
+                    valid_lps = [
+                        float(log_probs[tid]) for tid in sample_ids
+                        if 0 <= tid < len(log_probs)
+                    ]
+                    if valid_lps:
+                        avg_logprob = float(np.mean(valid_lps))
+
+            # Update confidence tracking for confidence-adaptive word batching
+            if avg_logprob is not None:
+                self._prev_avg_logprob = avg_logprob
+
             # Save current translation for next comparison
             self._prev_full_ids = new_full_ids
 
@@ -402,6 +435,7 @@ class AlignAttLABackend(SimulMTBackend):
                 source_words_seen=len(self._source_words),
                 generation_time_ms=elapsed_ms,
                 batch_first_emission_time=batch_first_et,
+                avg_logprob=avg_logprob,
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
@@ -1195,6 +1229,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_translate_attn = None
         self._current_attn_shift_write = None
         self._gen_positions_history = []
+        self._prev_avg_logprob = None
 
         if self._ctx is not None:
             ll.free_context(self._ctx)

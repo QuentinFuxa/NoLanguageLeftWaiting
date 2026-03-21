@@ -1121,6 +1121,89 @@ def compute_dynamic_word_batch(
     return base_wb
 
 
+def confidence_adaptive_word_batch(
+    base_wb: int,
+    prev_avg_logprob: Optional[float],
+    high_threshold: float = -0.5,
+    low_threshold: float = -2.0,
+) -> int:
+    """Adjust word_batch based on generation confidence from previous step.
+
+    Novel: no published work on confidence-based batch size adaptation for
+    simultaneous machine translation. Uses avg_logprob (from iteration 22)
+    to dynamically adapt how many source words we wait for before translating.
+
+    Confident generation (high logprob) -> model has enough context, emit sooner
+    (reduce wb by 1 for lower YAAL latency).
+    Uncertain generation (low logprob) -> model needs more context, wait longer
+    (increase wb by 1 for better quality).
+
+    Args:
+        base_wb: Base word_batch from config (may already be adjusted by
+            dynamic_word_batch or complexity_adaptive).
+        prev_avg_logprob: Average log-probability from previous translate() call.
+            None on first call (no adjustment). Range: typically -5.0 to 0.0.
+        high_threshold: Above this -> reduce wb (confident). Default -0.5.
+        low_threshold: Below this -> increase wb (uncertain). Default -2.0.
+
+    Returns:
+        Effective word_batch (always >= 1).
+    """
+    if prev_avg_logprob is None:
+        return base_wb
+    if prev_avg_logprob > high_threshold:
+        return max(1, base_wb - 1)
+    elif prev_avg_logprob < low_threshold:
+        return base_wb + 1
+    return base_wb
+
+
+# Language-pair token compression ratios (target tokens / source tokens).
+# These are empirical averages from FLORES with HY-MT1.5-7B subword tokenizer.
+# Used to set tighter generation caps per language pair.
+_LANG_PAIR_RATIOS = {
+    ("en", "zh"): 0.85,   # Chinese is more compact (characters vs words)
+    ("en", "de"): 1.15,   # German compounds are longer
+    ("en", "it"): 1.10,   # Italian is slightly longer
+    ("en", "fr"): 1.10,   # French is slightly longer
+    ("en", "es"): 1.10,   # Spanish is slightly longer
+    ("en", "ja"): 0.80,   # Japanese is more compact
+    ("en", "ko"): 0.85,   # Korean is more compact
+    ("cs", "en"): 1.10,   # Czech->English slightly expands
+    ("de", "en"): 0.90,   # German->English compresses
+    ("zh", "en"): 1.20,   # Chinese->English expands
+}
+
+
+def language_pair_gen_cap(
+    n_src_tokens: int,
+    src_lang: str,
+    tgt_lang: str,
+    min_cap: int = 3,
+) -> int:
+    """Compute language-pair-aware generation cap.
+
+    Different language pairs have different output/input token ratios.
+    EN->ZH produces fewer tokens (Chinese is compact), while EN->DE produces
+    more (German compounds). This adjusts the per-step generation cap to
+    avoid both overgeneration (waste, hallucination risk) and undergeneration
+    (cut-off translations).
+
+    Args:
+        n_src_tokens: Number of source tokens in the current batch.
+        src_lang: Source language code (e.g., "en", "cs").
+        tgt_lang: Target language code (e.g., "zh", "de").
+        min_cap: Minimum generation cap (default 3).
+
+    Returns:
+        Generation cap (number of tokens to generate at most).
+    """
+    ratio = _LANG_PAIR_RATIOS.get((src_lang, tgt_lang), 1.0)
+    # Apply ratio with a safety margin of 1.3x (allow some overgeneration)
+    cap = int(n_src_tokens * ratio * 1.3)
+    return max(min_cap, cap)
+
+
 # Common English function words that shouldn't end a translation unit.
 # If the batch ends on one of these, wait for one more content word.
 _EN_FUNCTION_WORDS = frozenset({
