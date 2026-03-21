@@ -147,7 +147,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~14,200 lines across 30 SimulMT modules, 859 tests
+### What exists now: ~14,800 lines across 30 SimulMT modules, 893 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -178,7 +178,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `alignatt.py` | 1750+ | Core border detection + 10 aggregation + AMS + temp norm + shift-k + info gain + cumulative + combined check + LSG logit KL + source coverage + monotonicity + n-gram repetition |
 | `head_transfer.py` | 310 | Cross-lingual alignment head transfer analysis + validation |
 | `complexity.py` | 175 | Source complexity estimation for adaptive parameter tuning |
-| `simulstream.py` | 834 | SimulStream SpeechProcessor wrapper, env-var config, auto-detect heads, direction switching |
+| `simulstream.py` | 950+ | SimulStream SpeechProcessor wrapper, longform mode, OmniSTEval output, auto sentence boundary, env-var config |
 | `fusion.py` | 600 | Weighted signal fusion: 8 signals -> continuous scores -> weighted sum -> border decision |
 | `calibrate.py` | 650 | Fusion weight calibration: trace collection, alignment-based labeling, grid search optimization |
 | `xcomet_scorer.py` | 220 | Standalone XCOMET-XL scorer (separate process, avoids OOM) |
@@ -248,6 +248,9 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `attention_monotonicity` | False | Attention monotonicity-based border adjustment. Novel signal |
 | `repetition_max_repeats` | None | N-gram repetition halt. None=disabled, 2=recommended. Hallucination prevention |
 | `attention_shift` | False | Cross-step attention position shift tracking. Novel signal |
+| `perplexity_adaptive_bd` | False | Hibiki-inspired: adjust bd from generation confidence. Low ppl=tighten, high ppl=widen |
+| `perplexity_bd_low` | 2.0 | Below this ppl -> bd-1 (confident, lower latency) |
+| `perplexity_bd_high` | 5.0 | Above this ppl -> bd+1 (uncertain, safer) |
 | `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
 | `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |

@@ -104,7 +104,7 @@ def validate_simulstream():
 
     from nllw.simulstream import (
         NLLWSpeechProcessor, SimulStreamConfig,
-        IncrementalOutput, DIRECTION_DEFAULTS,
+        IncrementalOutput, EmissionEvent, DIRECTION_DEFAULTS,
     )
 
     # All 4 competition directions configured
@@ -146,6 +146,47 @@ def validate_simulstream():
     # IncrementalOutput
     output = IncrementalOutput()
     ok &= check("Empty IncrementalOutput", output.is_empty)
+
+    # Longform mode (CRITICAL for competition)
+    ok &= check("Longform default enabled", SimulStreamConfig().longform is True)
+    ok &= check("Auto sentence boundary default enabled",
+                SimulStreamConfig().auto_sentence_boundary is True)
+
+    # EmissionEvent dataclass
+    event = EmissionEvent(emission_time=1.0, wall_clock=2.0, text="test")
+    ok &= check("EmissionEvent dataclass", event.status == "COMPLETE")
+
+    # Longform state tracking
+    proc2 = NLLWSpeechProcessor(SimulStreamConfig())
+    ok &= check("Longform emission log", hasattr(proc2, '_emission_log'))
+    ok &= check("Longform recording text", hasattr(proc2, '_recording_text'))
+    ok &= check("Longform sentence count", hasattr(proc2, '_n_sentences_in_recording'))
+
+    # OmniSTEval output method
+    ok &= check("to_omnisteval_entry method", hasattr(proc2, 'to_omnisteval_entry'))
+    ok &= check("emission_log property", hasattr(proc2, 'emission_log'))
+    ok &= check("get_recording_text method", hasattr(proc2, 'get_recording_text'))
+
+    # Test OmniSTEval output generation
+    proc2._recording_text = "Test output text."
+    proc2._emission_log = [
+        EmissionEvent(100.0, 120.0, "Test "),
+        EmissionEvent(200.0, 220.0, "output "),
+        EmissionEvent(300.0, 320.0, "text."),
+    ]
+    entry = proc2.to_omnisteval_entry(source_name="test.wav", source_length_ms=5000.0)
+    ok &= check("OmniSTEval entry has source", entry["source"] == "test.wav")
+    ok &= check("OmniSTEval entry has prediction", entry["prediction"] == "Test output text.")
+    ok &= check("OmniSTEval entry has delays", len(entry["delays"]) == 3)  # 3 words
+    ok &= check("OmniSTEval entry has elapsed", len(entry["elapsed"]) == 3)
+    ok &= check("OmniSTEval entry has source_length", entry["source_length"] == 5000.0)
+    ok &= check("OmniSTEval delays monotonic",
+                all(entry["delays"][i] <= entry["delays"][i+1]
+                    for i in range(len(entry["delays"])-1)))
+
+    # Longform gold transcript function exists
+    from nllw.simulstream import process_gold_transcript_longform
+    ok &= check("process_gold_transcript_longform exists", callable(process_gold_transcript_longform))
 
     return ok
 

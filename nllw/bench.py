@@ -57,6 +57,9 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "agg": "aggregation",
         "topp": "top_p_threshold",
         "adaptp": "adaptive_top_p",
+        "pplbd": "perplexity_adaptive_bd",
+        "ppllow": "perplexity_bd_low",
+        "pplhigh": "perplexity_bd_high",
         "dynbd": "dynamic_border",
         "ssbd": "ssbd_beta",
         "mask": "display_mask_k",
@@ -125,6 +128,9 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "aggregation": args.aggregation,
         "top_p_threshold": args.top_p_threshold,
         "adaptive_top_p": args.adaptive_top_p,
+        "perplexity_adaptive_bd": args.perplexity_adaptive_bd,
+        "perplexity_bd_low": args.perplexity_bd_low,
+        "perplexity_bd_high": args.perplexity_bd_high,
         "dynamic_border": args.dynamic_border,
         "ssbd_beta": args.ssbd_beta,
         "la_forced_decode": args.forced_decode,
@@ -385,6 +391,12 @@ def main():
                         help="Cumulative mass threshold for top_p aggregation (0.5-0.95)")
     parser.add_argument("--adaptive-top-p", action="store_true",
                         help="Adaptive top_p threshold per sentence based on source complexity")
+    parser.add_argument("--perplexity-adaptive-bd", action="store_true",
+                        help="Perplexity-based adaptive border (Hibiki-inspired): adjust bd from generation confidence")
+    parser.add_argument("--perplexity-bd-low", type=float, default=2.0,
+                        help="Perplexity threshold for confident=tighten border (default: 2.0)")
+    parser.add_argument("--perplexity-bd-high", type=float, default=5.0,
+                        help="Perplexity threshold for uncertain=widen border (default: 5.0)")
     parser.add_argument("--dynamic-border", action="store_true",
                         help="Enable entropy-based dynamic border distance")
     parser.add_argument("--ssbd-beta", type=float, default=None,
