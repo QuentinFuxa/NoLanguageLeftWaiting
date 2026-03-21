@@ -70,6 +70,7 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "tempnorm": "head_temp_normalize",
         "tempref": "head_temp_reference",
         "dynwb": "dynamic_word_batch",
+        "srcaware": "source_aware_batching",
         "infogain": "info_gain_threshold",
         "shiftk": "shift_k_threshold",
         "confirm": "border_confirm",
@@ -140,6 +141,7 @@ def _build_base_config_dict(args) -> Dict[str, Any]:
         "head_temp_normalize": args.head_temp_norm,
         "head_temp_reference": args.head_temp_ref,
         "dynamic_word_batch": args.dynamic_wb,
+        "source_aware_batching": args.source_aware_batch,
         "info_gain_threshold": args.info_gain,
         "shift_k_threshold": args.shift_k,
         "border_confirm": args.border_confirm,
@@ -415,6 +417,8 @@ def main():
                         help="Reference entropy for head temperature normalization")
     parser.add_argument("--dynamic-wb", action="store_true",
                         help="Enable dynamic word_batch (adjust by source length)")
+    parser.add_argument("--source-aware-batch", action="store_true",
+                        help="Source-aware batching: defer if batch ends on function word")
     parser.add_argument("--info-gain", type=float, default=None,
                         help="Info gain threshold for border modulation (0.3=recommended, None=disabled)")
     parser.add_argument("--shift-k", type=float, default=None,

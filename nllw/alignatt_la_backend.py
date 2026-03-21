@@ -45,6 +45,7 @@ from .alignatt import (
     check_border_dynamic,
     compute_attention_shift,
     compute_dynamic_word_batch,
+    should_defer_batch,
     compute_entropy,
     compute_entropy_change,
     compute_logit_kl,
@@ -277,6 +278,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._committed_text: str = ""       # Text of committed tokens
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
+        self._defer_counter = 0  # For source-aware batching
 
         # Revision history for NE metric computation
         self._revision_history: List[List[int]] = []
@@ -337,7 +339,17 @@ class AlignAttLABackend(SimulMTBackend):
                 )
 
             # Word batching
-            if self._batch_counter < effective_wb and not is_final:
+            should_skip = self._batch_counter < effective_wb
+            if not should_skip and not is_final and self.config.source_aware_batching:
+                src_lang = self.config.direction.split("-")[0] if self.config.direction else "en"
+                if should_defer_batch(
+                    source_word, source_lang=src_lang,
+                    max_defer=2, deferred_count=self._defer_counter,
+                ):
+                    should_skip = True
+                    self._defer_counter += 1
+
+            if should_skip and not is_final:
                 return TranslationStep(
                     text="",
                     is_final=False,
@@ -345,6 +357,7 @@ class AlignAttLABackend(SimulMTBackend):
                     generation_time_ms=(time.time() - t0) * 1000,
                 )
             self._batch_counter = 0
+            self._defer_counter = 0
 
             # Create context on first call per segment
             if self._ctx is None:
@@ -1164,6 +1177,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_full_ids = []
         self._source_words = []
         self._batch_counter = 0
+        self._defer_counter = 0
         self._revision_history = []
         # Reset cross-step tracking
         self._prev_first_token_entropy = None

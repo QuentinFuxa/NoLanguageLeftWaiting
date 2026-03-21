@@ -1121,6 +1121,70 @@ def compute_dynamic_word_batch(
     return base_wb
 
 
+# Common English function words that shouldn't end a translation unit.
+# If the batch ends on one of these, wait for one more content word.
+_EN_FUNCTION_WORDS = frozenset({
+    # Determiners
+    "the", "a", "an", "this", "that", "these", "those", "my", "your",
+    "his", "her", "its", "our", "their", "some", "any", "no", "every",
+    # Prepositions
+    "of", "in", "to", "for", "with", "on", "at", "from", "by", "about",
+    "into", "through", "during", "before", "after", "above", "below",
+    "between", "under", "along", "until", "upon",
+    # Conjunctions
+    "and", "or", "but", "nor", "yet", "so",
+    # Auxiliaries / particles
+    "is", "are", "was", "were", "be", "been", "being",
+    "has", "have", "had", "do", "does", "did",
+    "will", "would", "shall", "should", "may", "might", "can", "could",
+    "must", "not", "n't",
+    # Pronouns (when they start a clause, useful to wait for verb)
+    "i", "you", "he", "she", "it", "we", "they", "who", "which", "that",
+    # Relative / subordinating
+    "if", "when", "while", "because", "although", "since", "unless", "whether",
+})
+
+# Czech function words (for CS-EN source side)
+_CS_FUNCTION_WORDS = frozenset({
+    "a", "i", "v", "na", "se", "je", "z", "s", "k", "o", "do", "za",
+    "pro", "ze", "ve", "po", "od", "to", "ale", "jako", "tak", "jak",
+    "ani", "nebo", "aby", "kdyz", "ze", "ktery", "jez", "ten", "ta",
+})
+
+
+def should_defer_batch(
+    last_word: str,
+    source_lang: str = "en",
+    max_defer: int = 2,
+    deferred_count: int = 0,
+) -> bool:
+    """Check if translation should be deferred because the batch ends on a function word.
+
+    Improves translation quality by ensuring translation units don't end
+    with dangling function words (e.g., "the", "of", "in") that carry
+    little semantic content on their own.
+
+    Args:
+        last_word: The last source word in the current batch
+        source_lang: Source language code ("en" or "cs")
+        max_defer: Maximum extra words to wait (prevents unbounded latency)
+        deferred_count: How many times we've already deferred this batch
+
+    Returns:
+        True if translation should be deferred (wait for one more word)
+    """
+    if deferred_count >= max_defer:
+        return False
+
+    word_lower = last_word.lower().strip()
+
+    if source_lang == "cs":
+        return word_lower in _CS_FUNCTION_WORDS
+
+    # Default: English function words
+    return word_lower in _EN_FUNCTION_WORDS
+
+
 def compute_attention_info_gain(
     prev_attn: np.ndarray,
     curr_attn: np.ndarray,

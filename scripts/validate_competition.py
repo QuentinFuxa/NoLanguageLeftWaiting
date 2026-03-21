@@ -167,22 +167,57 @@ def validate_simulstream():
     ok &= check("emission_log property", hasattr(proc2, 'emission_log'))
     ok &= check("get_recording_text method", hasattr(proc2, 'get_recording_text'))
 
-    # Test OmniSTEval output generation
-    proc2._recording_text = "Test output text."
-    proc2._emission_log = [
+    # Test OmniSTEval output generation (use en-de to test word-level)
+    proc2_de = NLLWSpeechProcessor(SimulStreamConfig(direction="en-de"))
+    proc2_de._recording_text = "Test output text."
+    proc2_de._emission_log = [
         EmissionEvent(100.0, 120.0, "Test "),
         EmissionEvent(200.0, 220.0, "output "),
         EmissionEvent(300.0, 320.0, "text."),
     ]
-    entry = proc2.to_omnisteval_entry(source_name="test.wav", source_length_ms=5000.0)
+    entry = proc2_de.to_omnisteval_entry(source_name="test.wav", source_length_ms=5000.0)
     ok &= check("OmniSTEval entry has source", entry["source"] == "test.wav")
     ok &= check("OmniSTEval entry has prediction", entry["prediction"] == "Test output text.")
     ok &= check("OmniSTEval entry has delays", len(entry["delays"]) == 3)  # 3 words
     ok &= check("OmniSTEval entry has elapsed", len(entry["elapsed"]) == 3)
+
+    # Test char-level auto-detection for zh
+    proc2_zh = NLLWSpeechProcessor(SimulStreamConfig(direction="en-zh"))
+    proc2_zh._recording_text = "\u7f8e\u56fd\u603b\u7edf"  # 美国总统
+    proc2_zh._emission_log = [
+        EmissionEvent(100.0, 100.0, "\u7f8e\u56fd"),
+        EmissionEvent(200.0, 200.0, "\u603b\u7edf"),
+    ]
+    entry_zh = proc2_zh.to_omnisteval_entry(source_name="test.wav", source_length_ms=1000.0)
+    ok &= check("OmniSTEval zh auto char-level", len(entry_zh["delays"]) == 4)  # 4 chars, not 1 word
     ok &= check("OmniSTEval entry has source_length", entry["source_length"] == 5000.0)
     ok &= check("OmniSTEval delays monotonic",
                 all(entry["delays"][i] <= entry["delays"][i+1]
                     for i in range(len(entry["delays"])-1)))
+
+    # OmniSTEval artifact stripping
+    proc3 = NLLWSpeechProcessor(SimulStreamConfig())
+    proc3._recording_text = "Hello<end_of_turn> world<|endoftext|>"
+    proc3._emission_log = [
+        EmissionEvent(100.0, 100.0, "Hello<end_of_turn> "),
+        EmissionEvent(200.0, 200.0, "world<|endoftext|>"),
+    ]
+    entry3 = proc3.to_omnisteval_entry(source_name="test.wav", source_length_ms=1000.0)
+    ok &= check("LLM artifacts stripped", "<end_of_turn>" not in entry3["prediction"])
+    ok &= check("endoftext stripped", "<|endoftext|>" not in entry3["prediction"])
+
+    # NFKC normalization for char-level
+    proc4 = NLLWSpeechProcessor(SimulStreamConfig(direction="en-zh"))
+    proc4._recording_text = "\u7f8e\u56fd\u603b\u7edf"  # 美国总统
+    proc4._emission_log = [
+        EmissionEvent(100.0, 100.0, "\u7f8e\u56fd"),
+        EmissionEvent(200.0, 200.0, "\u603b\u7edf"),
+    ]
+    entry4 = proc4.to_omnisteval_entry(
+        source_name="test.wav", source_length_ms=1000.0, char_level=True)
+    import unicodedata
+    ok &= check("NFKC normalized", entry4["prediction"] == unicodedata.normalize("NFKC", "\u7f8e\u56fd\u603b\u7edf"))
+    ok &= check("Char delays match chars", len(entry4["delays"]) == len(entry4["prediction"]))
 
     # Longform gold transcript function exists
     from nllw.simulstream import process_gold_transcript_longform
@@ -218,6 +253,52 @@ def validate_omnisteval():
     # Serialization
     d = entry.__dict__ if hasattr(entry, '__dict__') else {}
     ok &= check("Entry has prediction", "prediction" in str(d) or hasattr(entry, 'prediction'), True)
+
+    # OmniSTEval package compatibility test
+    try:
+        import omnisteval
+        import tempfile
+
+        # Test word-level format
+        test_entry = {
+            "source": "test.wav",
+            "prediction": "Hello World test",
+            "delays": [100.0, 200.0, 300.0],
+            "elapsed": [110.0, 210.0, 310.0],
+            "source_length": 5000.0,
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps(test_entry) + "\n")
+            path = f.name
+        instances, _ = omnisteval._load_hypothesis_jsonl(
+            path, char_level=False,
+            segmentation_order=["test.wav"],
+            fix_emission_ca_flag=False,
+        )
+        os.unlink(path)
+        ok &= check("OmniSTEval word-level parse", len(instances) == 1 and len(instances[0]) == 3)
+
+        # Test char-level format (Chinese)
+        test_entry_zh = {
+            "source": "test.wav",
+            "prediction": "\u7f8e\u56fd\u603b\u7edf",
+            "delays": [100.0, 100.0, 200.0, 200.0],
+            "elapsed": [100.0, 100.0, 200.0, 200.0],
+            "source_length": 5000.0,
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps(test_entry_zh, ensure_ascii=False) + "\n")
+            path = f.name
+        instances_zh, _ = omnisteval._load_hypothesis_jsonl(
+            path, char_level=True,
+            segmentation_order=["test.wav"],
+            fix_emission_ca_flag=False,
+        )
+        os.unlink(path)
+        ok &= check("OmniSTEval char-level parse", len(instances_zh) == 1 and len(instances_zh[0]) == 4)
+
+    except ImportError:
+        ok &= check("OmniSTEval package", False, "not installed")
 
     return ok
 

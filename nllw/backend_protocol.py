@@ -96,6 +96,10 @@ class BackendConfig:
     # Short sentences (< 8 words) -> wb - 1, long (> 20) -> wb + 1.
     # Gives faster latency on short inputs and safer quality on long ones.
     dynamic_word_batch: bool = False
+    # Source-aware word batching: defer translation if the batch ends on a
+    # function word (the, of, in, etc.). Ensures translation units don't
+    # break mid-phrase. Allows up to max_defer extra words per batch.
+    source_aware_batching: bool = False
     # Attention information gain: use KL divergence between consecutive
     # attention snapshots as secondary border signal. Large divergence = new
     # source info being processed, keep generating. Small divergence = source

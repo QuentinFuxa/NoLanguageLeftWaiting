@@ -1,32 +1,37 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 20, 2026-03-21)
+## Current State (after Iteration 21, 2026-03-21)
 
-**30+ SimulMT modules (~14,800 lines), 893 tests**
+**30+ SimulMT modules (~15,000 lines), 920 tests**
 **100-sentence CONFIRMED: COMET=0.894 EN-ZH, 0.881 EN-DE, 0.891 EN-IT, 0.879 CS-EN with top_p**
 
-### What happened in Iteration 20
-- **Longform mode implemented** (CRITICAL for competition):
-  - `longform=True` in SimulStreamConfig (default): accumulates output across sentence boundaries
-  - Backend resets at sentence boundaries (AlignAtt needs this) but output is one continuous stream
-  - `_recording_text` tracks full recording, `_emission_log` tracks per-event timestamps
-  - Fixed double-reset bug (translate + reset calling _handle_segment_end twice)
-  - `clear()` is only full reset (between recordings)
-- **OmniSTEval longform output** (`to_omnisteval_entry()`):
-  - ONE JSONL entry per recording: `{"source", "prediction", "delays", "elapsed", "source_length"}`
-  - Per-word or per-character delays matching `ss-to-log.py` reference format
-  - `process_gold_transcript_longform()` for competition-format evaluation
-- **Auto sentence boundary detection**: target-side punctuation (。？！.?!) triggers segment reset
-- **IWSLT configs updated**: all 4 directions now have `longform: true`
-- **Perplexity-based adaptive border** (Hibiki-inspired):
-  - Adjusts bd per translate() based on generation confidence (logit perplexity)
-  - Low ppl (confident) -> bd-1 (faster). High ppl (uncertain) -> bd+1 (safer)
-  - Targets YAAL latency. Unlike entropy veto (dead end), adjusts R/W policy not generation
-  - CLI: `--perplexity-adaptive-bd`, sweep: `pplbd=0,1 ppllow=1.5,2.0 pplhigh=4.0,5.0`
-  - **Needs GPU testing** to measure YAAL reduction
-- **SOTA research completed**: Hibiki, ExPosST, Translation Heads ICLR 2026, DuoAttention
-- **Competition validator**: 65+ checks, ALL PASSING
-- **893 tests** (34 new, all passing)
+### What happened in Iteration 21
+- **OmniSTEval format hardened** (CRITICAL for competition):
+  - NFKC normalization for char-level delays (matching `ss-to-log.py` reference)
+  - LLM artifact stripping: `<end_of_turn>`, `<|endoftext|>` removed from prediction
+  - Monotonic delay enforcement: delays never decrease (OmniSTEval requirement)
+  - Event text normalization in char-to-delay mapping
+- **Source-aware word batching** (new technique):
+  - `source_aware_batching` config + `--source-aware-batch` CLI
+  - Defers translation when batch ends on a function word (the, of, in, etc.)
+  - Function word lists for English (60+) and Czech (30+)
+  - Max 2 extra words deferred per batch to bound latency
+  - Sweep: `srcaware=0,1`
+  - **Needs GPU testing** to measure quality improvement
+- **Comprehensive GPU experiment script** (`scripts/run_iteration21_experiments.py`):
+  - Phase 1: Smoke test (all 4 directions, 20 sentences)
+  - Phase 2: Perplexity adaptive border (100 sentences, threshold sweep)
+  - Phase 3: Longform E2E (gold transcript -> OmniSTEval JSONL)
+  - Phase 4: Multi-direction longform validation
+  - Phase 5: Competition format output (100 sentences, OmniSTEval)
+  - Phase 6: Adaptive top_p decision (fixed vs adaptive)
+  - Phase 7: Source-aware batching (fixed vs source-aware)
+- **Longform bug fixes** (from code review):
+  - char_level auto-detection for zh/ja/ko targets (prevents invalid OmniSTEval output)
+  - n_ctx overflow protection (safety valve at 70% of context window)
+  - Delay count validation with auto-fix in to_omnisteval_entry()
+- **Research update**: CUNI won IWSLT 2025 with same AlignAtt+LA architecture. Translation Heads (ICLR 2026) validates our head detection. Attribution-Guided Decoding (ICLR 2026) is promising zero-shot quality signal.
+- **920 tests** (27 new, all passing), **98 competition checks** all passing
 
 ### 100-Sentence Verified Results (iteration 18, with tuned p_threshold + CI)
 
@@ -39,27 +44,35 @@
 
 ## What to do next
 
-### Priority 1: Competition E2E Testing (IWSLT 2026, eval April 1-15, ~10 days)
-- **Docker build + test**: Build image, run self-test. Must support linux/amd64 (H100).
-- **Longform E2E on A40**: Run `process_gold_transcript_longform()` on a real recording from iwslt26-sst
-  - Use gold JSONL from `iwslt26-sst/inputs/en/acl6060.ts/gold-jsonl/`
-  - Verify output matches OmniSTEval format via `omnisteval longform`
-  - Compare LongYAAL + COMET with reference system scores
-- **SimulStream HTTP server E2E**: Install simulstream package, test HTTP server integration
-  - `simulstream.server --speech-processor nllw.simulstream:NLLWSpeechProcessor`
-  - Verify direction switching, clear() between recordings, longform accumulation
-- **Multi-direction longform test**: Verify all 4 directions work in longform mode
-- **Decision**: Enable `adaptive_top_p` for competition? Phase 1 shows 6-12% latency reduction for <0.002 COMET cost
+### Priority 1: RUN GPU EXPERIMENTS (URGENT -- competition in ~10 days)
+- **Run iteration 21 script on A40**:
+  ```bash
+  # Sync code to A40 first:
+  rsync -avz . fuxa@quest.ms.mff.cuni.cz:nllw_deploy/ -e "ssh -p 3622"
+  # Then on A40:
+  python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf
+  # Quick mode for validation:
+  python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick
+  # With real gold transcript:
+  python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 3 \
+      --gold-jsonl /path/to/iwslt26-sst/inputs/en/acl6060.ts/gold-jsonl/2022.acl-long.117.jsonl
+  ```
+- Key experiments that NEED results:
+  - Perplexity adaptive border: YAAL improvement vs quality cost
+  - Source-aware batching: quality improvement from better translation units
+  - Adaptive top_p: confirm 6-12% YAAL reduction for competition decision
+  - Longform E2E: verify OmniSTEval output matches reference format
 
-### Priority 2: Quality Improvements
-- **Context injection for longform**: In longform mode, context_sentences could help since segments are consecutive. Test context=1 in longform (even though it hurts HY-MT in isolation, longform continuity might change the equation)
-- Run competition-format test (SimulStream + OmniSTEval) on A40
-- If adaptive_top_p confirmed: update IWSLT configs to enable it
+### Priority 2: Competition Decisions (based on GPU results)
+- **Enable perplexity adaptive bd?** If YAAL improves without quality loss -> yes
+- **Enable source-aware batching?** If COMET improves -> yes
+- **Enable adaptive top_p?** Phase 1 shows promising, need 100-sent confirmation
+- **Update IWSLT configs** with any winning features
 
-### Priority 3: Research Ideas (if time permits)
-- **Syntax-aware chunking (SASST)**: Dependency-based word batching for better segmentation
-- **ExPosST positional pre-allocation**: Pre-allocate source positions for faster KV cache reuse
-- **Perplexity gain signal**: Use LLM perplexity change as border signal
+### Priority 3: Docker + SimulStream E2E
+- Docker build + test on linux/amd64
+- SimulStream HTTP server integration test
+- Full pipeline: SimulStream -> NLLWSpeechProcessor -> OmniSTEval output
 
 ### Dead Ends Confirmed (20+)
 See CLAUDE.md for full list. Key ones: context injection, entropy veto, softmax_mean, signal fusion cascade, repetition halt, top_p_weighted, Qwen3.5-9B.
@@ -76,7 +89,8 @@ Use: `rsync -avz` (without --delete) to preserve files.
 - **All directions at 99.7-100.2% of offline quality**
 - **Model path on A40**: `/home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
 - **Competition validator**: `python scripts/validate_competition.py` (65+ checks pass)
-- **New in iter 20**: Longform mode, OmniSTEval output, perplexity adaptive border, 893 tests
+- **New in iter 21**: OmniSTEval format fixes, source-aware batching, 7-phase GPU script, 920 tests
 - **OmniSTEval format**: ONE JSONL line per recording with per-word delays in ms
   - Reference converter: `iwslt26-sst/evaluation/ss-to-log.py`
   - Run: `omnisteval longform --speech_segmentation ... --ref_sentences_file ... --hypothesis_file out.log`
+- **Gold transcripts**: `iwslt26-sst/inputs/en/acl6060.ts/gold-jsonl/` (1863 words per recording)
