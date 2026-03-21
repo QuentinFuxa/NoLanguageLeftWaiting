@@ -278,6 +278,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._committed_text: str = ""       # Text of committed tokens
         self._prev_contexts: List[Dict[str, str]] = []
         self._batch_counter = 0
+        self._batch_first_emission_time: Optional[float] = None  # For LongYAAL
         self._defer_counter = 0  # For source-aware batching
 
         # Revision history for NE metric computation
@@ -310,6 +311,9 @@ class AlignAttLABackend(SimulMTBackend):
         with self._lock:
             self._source_words.append(source_word)
             self._batch_counter += 1
+            # Track first word's emission time in batch (for correct LongYAAL)
+            if self._batch_first_emission_time is None:
+                self._batch_first_emission_time = emission_time
 
             # Effective parameters (may be overridden by complexity)
             effective_wb = self.config.word_batch
@@ -356,7 +360,9 @@ class AlignAttLABackend(SimulMTBackend):
                     source_words_seen=len(self._source_words),
                     generation_time_ms=(time.time() - t0) * 1000,
                 )
+            batch_first_et = self._batch_first_emission_time
             self._batch_counter = 0
+            self._batch_first_emission_time = None
             self._defer_counter = 0
 
             # Create context on first call per segment
@@ -395,6 +401,7 @@ class AlignAttLABackend(SimulMTBackend):
                 stopped_at_border=not is_final and len(new_full_ids) > 0,
                 source_words_seen=len(self._source_words),
                 generation_time_ms=elapsed_ms,
+                batch_first_emission_time=batch_first_et,
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
@@ -1177,6 +1184,7 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_full_ids = []
         self._source_words = []
         self._batch_counter = 0
+        self._batch_first_emission_time = None
         self._defer_counter = 0
         self._revision_history = []
         # Reset cross-step tracking

@@ -57,7 +57,8 @@ ENV LD_LIBRARY_PATH=/app/lib:${LD_LIBRARY_PATH}
 
 # Python dependencies (install from pyproject.toml + extras)
 COPY pyproject.toml /app/
-RUN pip3 install --no-cache-dir numpy sacrebleu pyyaml datasets
+# Note: simulstream is required for the HTTP server entrypoint
+RUN pip3 install --no-cache-dir numpy sacrebleu pyyaml datasets simulstream
 
 # Models (large -- put early for Docker layer caching)
 # ASR model: Qwen3-ASR-1.7B (~3.4 GB)

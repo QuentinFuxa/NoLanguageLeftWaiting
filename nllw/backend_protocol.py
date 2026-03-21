@@ -18,6 +18,13 @@ class TranslationStep:
     stopped_at_border: bool = False  # True if AlignAtt border was hit
     source_words_seen: int = 0   # Number of source words processed so far
     generation_time_ms: float = 0.0  # Wall-clock time for this step
+    # Batch first emission time: ASR time of the FIRST word in this batch.
+    # For correct LongYAAL: attribute output to when batch started, not completed.
+    # None means "use the emission_time from the current call" (default).
+    batch_first_emission_time: Optional[float] = None
+    # Average log-probability of generated tokens (quality diagnostic).
+    # Higher = more confident generation. None if no tokens generated.
+    avg_logprob: Optional[float] = None
 
 
 @dataclass

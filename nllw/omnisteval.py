@@ -79,16 +79,35 @@ class SimulEvalEntry:
         return d
 
     def validate(self) -> List[str]:
-        """Check for format violations. Returns list of error strings."""
+        """Check for format violations. Returns list of error strings.
+
+        Handles both word-level (European languages) and char-level (CJK)
+        delay arrays. If delays length matches character count but not word
+        count, assumes char-level mode (valid for zh/ja/ko).
+        """
         errors = []
-        n_words = len(self.prediction.split()) if self.prediction else 0
-        if self.delays and len(self.delays) != n_words:
+        if not self.prediction:
+            n_units = 0
+        else:
+            n_words = len(self.prediction.split())
+            n_chars = len(self.prediction)
+            # Accept either word-level or char-level delays
+            # CJK languages produce per-character delays
+            n_delays = len(self.delays) if self.delays else 0
+            if n_delays == n_words:
+                n_units = n_words  # word-level
+            elif n_delays == n_chars:
+                n_units = n_chars  # char-level (CJK)
+            else:
+                n_units = n_words  # default to word-level for error reporting
+
+        if self.delays and len(self.delays) != n_units:
             errors.append(
-                f"delays length ({len(self.delays)}) != prediction words ({n_words})"
+                f"delays length ({len(self.delays)}) != prediction units ({n_units})"
             )
-        if self.elapsed and len(self.elapsed) != n_words:
+        if self.elapsed and len(self.elapsed) != n_units:
             errors.append(
-                f"elapsed length ({len(self.elapsed)}) != prediction words ({n_words})"
+                f"elapsed length ({len(self.elapsed)}) != prediction units ({n_units})"
             )
         if self.source_length <= 0:
             errors.append(f"source_length must be positive, got {self.source_length}")
