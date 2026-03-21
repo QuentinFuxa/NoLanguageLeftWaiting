@@ -354,3 +354,83 @@ This is novel and could be a paper contribution.
 - Cross-lingual head transfer validated: most models need only 1 detection run
 - HY-MT1.5-7B: 0.842 XCOMET-XL EN-ZH (strong baseline)
 - **NLLW is the first system applying AlignAtt to decoder-only LLMs for SimulMT**
+
+---
+
+## Iteration 19 Research Update (2026-03-21)
+
+### New Papers NOT Previously Documented
+
+1. **"Redefining Machine Simultaneous Interpretation"** (arXiv 2601.11002, Jan 2026)
+   - Extends SiMT beyond READ/WRITE with human-like strategies: Sentence_Cut, Drop, Partial_Summarization, Pronominalization
+   - Relevance: Low (requires fine-tuning). But Sentence_Cut could inspire a training-free heuristic
+   - Effort: High
+
+2. **KVLink** (arXiv 2502.16002, NeurIPS 2025)
+   - Precompute KV cache for document segments, concatenate with position embedding adjustment
+   - 96% reduction in time-to-first-token
+   - Relevance: Medium. Position embedding adjustment for concatenated KV caches relevant to our streaming
+   - Code: github.com/UCSB-NLP-Chang/KVLink
+
+3. **"From Static Inference to Dynamic Interaction"** (arXiv 2603.04592, March 2026)
+   - Comprehensive survey of streaming LLM techniques
+   - Good reference for positioning our work
+
+### SimulStream API Reference (from code analysis)
+
+```python
+# SpeechProcessor ABC -- ALL methods required
+class SpeechProcessor(ABC):
+    def __init__(self, config: SimpleNamespace): ...
+    speech_chunk_size: float  # property, seconds
+    load_model(cls, config: SimpleNamespace)  # classmethod
+    process_chunk(self, waveform: np.float32) -> IncrementalOutput
+    set_source_language(self, language: str) -> None
+    set_target_language(self, language: str) -> None
+    end_of_stream(self) -> IncrementalOutput
+    tokens_to_string(self, tokens: List[str]) -> str
+    clear(self) -> None
+```
+
+**HTTP endpoints** (port 8080):
+- `GET /speech_chunk_size` -> `{"speech_chunk_size": float}`
+- `POST /process_chunk` -> `{"waveform": base64_str}` -> IncrementalOutput dict
+- `PUT /source_language` -> `{"language": str}` -> 204
+- `PUT /target_language` -> `{"language": str}` -> 204
+- `POST /end_of_stream` -> IncrementalOutput dict
+- `POST /clear` -> 204
+
+**Session management**: Pool of pre-allocated processors, TTL-based cleanup.
+**Audio format**: 1D float32, PCM [-1,1], 16kHz, base64 encoded.
+**Config**: `load_model` receives `SimpleNamespace` (not dict).
+
+### LongYAAL Clarification
+
+From OmniSTEval source:
+- `tau_YAAL = max{i : d_i < |X|}` -- words emitted **strictly before** source ends
+- `gamma = max(|Y_hyp|, |Y_ref|) / |X_src|` -- uses max of hyp/ref length
+- LongYAAL = YAAL applied at document level with SoftSegmenter resegmentation
+- IWSLT 2026 ranking: by **non-computation-aware LongYAAL** (CU timestamps)
+- Both CA and CU metrics reported but CU is primary
+
+### CRITICAL: Longform Evaluation Pipeline
+
+OmniSTEval longform mode:
+1. System produces **ONE long output per audio recording** (not per-sentence!)
+2. OmniSTEval SoftSegmenter aligns hypothesis words to reference segments using Jaccard char similarity (NW-like DP)
+3. Aligned words re-segmented into reference segments
+4. LongYAAL computed per re-segmented instance, averaged across segments
+
+**This means**: our SimulStream wrapper must accumulate output across the entire recording and NOT reset between sentences. The `clear()` method is only called between recordings, not between sentences within a recording.
+
+LongYAAL longform cutoff uses `time_to_recording_end` (not segment source_length). Words past segment boundaries ARE included, words after recording ends are excluded.
+
+OmniSTEval JSONL input (one line per recording):
+```json
+{"source": "recording.wav", "prediction": "full translation...", "delays": [...ms...], "elapsed": [...ms...], "source_length": 220000}
+```
+
+### Docker Notes
+- Must support `linux/arm64` architecture (use `--platform` during build)
+- Single H100 80GB
+- Submissions updatable during April 1-15 eval window

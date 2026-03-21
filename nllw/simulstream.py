@@ -215,6 +215,13 @@ class NLLWSpeechProcessor:
        -> buffers audio, runs ASR, feeds words to MT
     2. Text mode (process_words receives pre-extracted words)
        -> directly feeds words to MT (for testing and evaluation)
+
+    Environment variables for Docker (override config):
+        NLLW_MODEL_PATH: Path to GGUF model file
+        NLLW_HEADS_DIR: Directory containing head config JSONs
+        NLLW_CONFIGS_DIR: Directory with per-direction YAML configs
+        NLLW_N_GPU_LAYERS: Number of GPU layers (default: 99)
+        NLLW_DEFAULT_DIRECTION: Default language direction (default: en-zh)
     """
 
     def __init__(self, config: SimulStreamConfig):
@@ -230,36 +237,149 @@ class NLLWSpeechProcessor:
         self._is_initialized = False
         self._source_lang = config.direction.split("-")[0]
         self._target_lang = config.direction.split("-")[1] if "-" in config.direction else "zh"
+        self._word_emission_times: List[float] = []  # Track emission times for LongYAAL
 
     @classmethod
-    def load_model(cls, config: SimulStreamConfig) -> "NLLWSpeechProcessor":
+    def load_model(cls, config=None) -> "NLLWSpeechProcessor":
         """Factory method matching SimulStream's load_model pattern.
 
+        Accepts SimulStreamConfig, dict, or None (uses env vars).
+        This flexibility ensures compatibility with different SimulStream
+        server implementations.
+
         Args:
-            config: SimulStreamConfig with model paths and parameters.
+            config: SimulStreamConfig, dict with config keys, or None.
+                    If None, reads from environment variables.
 
         Returns:
             Initialized NLLWSpeechProcessor ready for process_chunk() calls.
         """
+        if config is None:
+            config = cls._config_from_env()
+        elif isinstance(config, dict):
+            config = cls._config_from_dict(config)
+        elif not isinstance(config, SimulStreamConfig):
+            # Try to convert from any config-like object
+            try:
+                config = cls._config_from_dict(vars(config))
+            except Exception:
+                logger.warning("Unknown config type %s, using defaults", type(config))
+                config = cls._config_from_env()
+
         processor = cls(config)
         processor._initialize()
         return processor
 
+    @classmethod
+    def _config_from_env(cls) -> SimulStreamConfig:
+        """Build config from environment variables (Docker-friendly)."""
+        direction = os.environ.get("NLLW_DEFAULT_DIRECTION", "en-zh")
+        direction_cfg = DIRECTION_DEFAULTS.get(direction, {})
+
+        model_path = os.environ.get("NLLW_MODEL_PATH", "/app/models/hymt1.5-7b-q8_0.gguf")
+        heads_dir = os.environ.get("NLLW_HEADS_DIR", "/app/heads")
+        n_gpu = int(os.environ.get("NLLW_N_GPU_LAYERS", "99"))
+
+        # Auto-detect heads path from direction
+        src, tgt = direction.split("-") if "-" in direction else ("en", "zh")
+        heads_path = os.path.join(heads_dir, f"translation_heads_hymt_en_{tgt}.json")
+        if not os.path.exists(heads_path):
+            # Try alternative naming
+            for pattern in [
+                f"translation_heads_hy_mt1_5_7b_q8_0_{src}_{tgt}.json",
+                f"translation_heads_hymt_{src}_{tgt}.json",
+            ]:
+                alt = os.path.join(heads_dir, pattern)
+                if os.path.exists(alt):
+                    heads_path = alt
+                    break
+
+        config = SimulStreamConfig(
+            model_path=model_path,
+            heads_path=heads_path,
+            direction=direction,
+            **{k: v for k, v in direction_cfg.items()
+               if k in SimulStreamConfig.__dataclass_fields__},
+        )
+        config.extra_backend_params["n_gpu_layers"] = n_gpu
+
+        logger.info(
+            "Config from env: model=%s, heads=%s, direction=%s, n_gpu=%d",
+            model_path, heads_path, direction, n_gpu,
+        )
+        return config
+
+    @classmethod
+    def _config_from_dict(cls, d: dict) -> SimulStreamConfig:
+        """Build SimulStreamConfig from a dictionary."""
+        ss_keys = {f.name for f in SimulStreamConfig.__dataclass_fields__.values()}
+        ss_params = {k: v for k, v in d.items() if k in ss_keys}
+        extra = {k: v for k, v in d.items() if k not in ss_keys}
+        if extra:
+            ss_params.setdefault("extra_backend_params", {}).update(extra)
+        return SimulStreamConfig(**ss_params)
+
     def _initialize(self):
-        """Initialize the MT backend."""
+        """Initialize the MT backend.
+
+        Handles missing model gracefully for testing without GPU.
+        """
         if self._is_initialized:
             return
 
+        # Auto-detect heads if not provided
+        if not self.config.heads_path and self.config.model_path:
+            self._auto_detect_heads()
+
         backend_config = self.config.to_backend_config()
-        self._backend = create_backend(backend_config)
-        self._is_initialized = True
-        logger.info(
-            "NLLWSpeechProcessor initialized: %s, %s, bd=%d, wb=%d",
-            self.config.backend_type,
-            self.config.direction,
-            self.config.border_distance,
-            self.config.word_batch,
-        )
+        try:
+            self._backend = create_backend(backend_config)
+            self._is_initialized = True
+            logger.info(
+                "NLLWSpeechProcessor initialized: %s, %s, bd=%d, wb=%d, agg=%s, p=%.2f",
+                self.config.backend_type,
+                self.config.direction,
+                self.config.border_distance,
+                self.config.word_batch,
+                self.config.aggregation,
+                self.config.top_p_threshold,
+            )
+        except Exception as e:
+            logger.error("Failed to initialize backend: %s", e)
+            raise
+
+    def _auto_detect_heads(self):
+        """Try to find heads config from model path and direction."""
+        heads_dir = os.environ.get("NLLW_HEADS_DIR", "")
+        if not heads_dir:
+            # Look in standard locations
+            for candidate in [
+                os.path.join(os.path.dirname(self.config.model_path), "..", "heads"),
+                os.path.join(os.path.dirname(__file__), "heads", "configs"),
+                "/app/heads",
+            ]:
+                if os.path.isdir(candidate):
+                    heads_dir = candidate
+                    break
+
+        if not heads_dir:
+            return
+
+        parts = self.config.direction.split("-")
+        src = parts[0] if len(parts) >= 1 else "en"
+        tgt = parts[1] if len(parts) >= 2 else "zh"
+
+        for pattern in [
+            f"translation_heads_hymt_en_{tgt}.json",
+            f"translation_heads_hymt_{src}_{tgt}.json",
+            f"translation_heads_hy_mt1_5_7b_q8_0_{src}_{tgt}.json",
+            f"translation_heads_hymt_en_zh.json",  # Fallback: cross-lingual transfer
+        ]:
+            path = os.path.join(heads_dir, pattern)
+            if os.path.exists(path):
+                self.config.heads_path = path
+                logger.info("Auto-detected heads: %s", path)
+                return
 
     def process_chunk(self, waveform: np.ndarray) -> IncrementalOutput:
         """Process one audio chunk (SimulStream protocol).
@@ -372,20 +492,8 @@ class NLLWSpeechProcessor:
             lang: ISO language code (e.g., "en", "cs")
         """
         self._source_lang = lang
-        # Update direction if target is also set
         if self._target_lang:
-            new_direction = f"{lang}-{self._target_lang}"
-            if new_direction != self.config.direction:
-                self.config.direction = new_direction
-                # Apply direction-specific defaults
-                if new_direction in DIRECTION_DEFAULTS:
-                    for k, v in DIRECTION_DEFAULTS[new_direction].items():
-                        setattr(self.config, k, v)
-                # Force re-initialization on next call
-                if self._backend:
-                    self._backend.close()
-                    self._backend = None
-                    self._is_initialized = False
+            self._update_direction(f"{lang}-{self._target_lang}")
 
     def set_target_language(self, lang: str):
         """Set target language (SimulStream protocol).
@@ -395,16 +503,37 @@ class NLLWSpeechProcessor:
         """
         self._target_lang = lang
         if self._source_lang:
-            new_direction = f"{self._source_lang}-{lang}"
-            if new_direction != self.config.direction:
-                self.config.direction = new_direction
-                if new_direction in DIRECTION_DEFAULTS:
-                    for k, v in DIRECTION_DEFAULTS[new_direction].items():
-                        setattr(self.config, k, v)
-                if self._backend:
-                    self._backend.close()
-                    self._backend = None
-                    self._is_initialized = False
+            self._update_direction(f"{self._source_lang}-{lang}")
+
+    def _update_direction(self, new_direction: str):
+        """Update direction and reload backend if changed."""
+        if new_direction == self.config.direction:
+            return
+
+        logger.info("Direction changed: %s -> %s", self.config.direction, new_direction)
+        self.config.direction = new_direction
+
+        # Apply direction-specific defaults
+        if new_direction in DIRECTION_DEFAULTS:
+            for k, v in DIRECTION_DEFAULTS[new_direction].items():
+                setattr(self.config, k, v)
+            logger.info(
+                "Applied %s defaults: bd=%d, wb=%d, agg=%s, p=%.2f",
+                new_direction,
+                self.config.border_distance,
+                self.config.word_batch,
+                self.config.aggregation,
+                self.config.top_p_threshold,
+            )
+
+        # Reset heads path so auto-detection re-runs for new direction
+        self.config.heads_path = ""
+
+        # Force re-initialization on next call
+        if self._backend:
+            self._backend.close()
+            self._backend = None
+            self._is_initialized = False
 
     def tokens_to_string(self, tokens: List[str]) -> str:
         """Convert token list to human-readable string (SimulStream protocol).
@@ -443,6 +572,7 @@ class NLLWSpeechProcessor:
         self._current_text = ""
         self._n_chunks_processed = 0
         self._total_audio_seconds = 0.0
+        self._word_emission_times = []
 
     def close(self):
         """Free all resources."""
@@ -473,6 +603,12 @@ class NLLWSpeechProcessor:
             "chunks_processed": self._n_chunks_processed,
             "total_audio_seconds": self._total_audio_seconds,
             "committed_text": self._committed_text,
+            "direction": self.config.direction,
+            "backend_type": self.config.backend_type,
+            "border_distance": self.config.border_distance,
+            "word_batch": self.config.word_batch,
+            "aggregation": self.config.aggregation,
+            "top_p_threshold": self.config.top_p_threshold,
         }
 
 

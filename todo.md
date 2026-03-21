@@ -532,6 +532,34 @@
   - Phase 4: Variance estimation (different sentence subsets)
 - [x] 34 new tests (all passing)
 
+## DONE -- Iteration 19: LongYAAL Metrics, SimulStream Hardening, Competition Readiness
+
+- [x] **LongYAAL metric** (IWSLT 2026 PRIMARY latency metric):
+  - `compute_longyaal()`: word-count domain LongYAAL (= YAAL in longform mode)
+  - `compute_longyaal_ms()`: time-domain LongYAAL in milliseconds (for OmniSTEval)
+  - `compute_stream_laal()`: IWSLT 2026 secondary latency metric (monotonized LAAL)
+  - Added `longyaal`, `longyaal_ms`, `stream_laal` to `LatencyMetrics` dataclass
+  - Added `avg_longyaal`, `avg_stream_laal` to `EvalResult`
+  - Updated bench.py and eval.py output to show LongYAAL as primary latency metric
+  - 13 new tests (all passing)
+- [x] **SimulStream wrapper hardened** (`nllw/simulstream.py`):
+  - `load_model(None)`: reads config from env vars (Docker-compatible)
+  - `load_model(dict)`: accepts dict config from SimulStream server
+  - `load_model(SimulStreamConfig)`: direct config (backwards compatible)
+  - Auto-detect heads config from direction + model path
+  - Centralized `_update_direction()` for cleaner direction switching
+  - Env vars: `NLLW_MODEL_PATH`, `NLLW_HEADS_DIR`, `NLLW_N_GPU_LAYERS`, `NLLW_DEFAULT_DIRECTION`
+  - 32 new tests (all passing)
+- [x] **Dockerfile updated for competition**:
+  - Fixed missing `requirements.txt` (now installs from pyproject.toml)
+  - Added NLLW environment variables for auto-configuration
+  - Added health check: `python3 -c "from nllw.simulstream import NLLWSpeechProcessor"`
+  - Documented multi-direction support via env vars
+- [x] **Competition validator** (`scripts/validate_competition.py`):
+  - 50+ checks: imports, metrics, SimulStream protocol, OmniSTEval, configs, heads, corpus, Dockerfile
+  - All checks passing
+- [x] 859 unit tests (45 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -716,6 +744,13 @@
 - [ ] **EASiST end-to-end SimulST** (arxiv 2504.11809): End-to-end approach with explicit attention to synchronize speech and text. Different from our cascaded approach.
 - [ ] **SimulS2S-LLM** (arxiv 2504.15509): Speech-to-speech simultaneous translation with LLMs.
 - [x] **Translation Heads paper** (OpenReview 2025): Validates our head detection approach -- alignment heads are universal, sparse, cross-lingually consistent. Already confirmed by our `head_transfer.py` results.
+
+### NEW Iteration 19 Research Findings (2026-03-21)
+
+- [ ] **KVLink** (arXiv 2502.16002, NeurIPS 2025): Precompute KV cache for segments, concatenate with position adjustment. 96% time-to-first-token reduction. Relevant for our streaming KV cache.
+- [ ] **wb=1 with top_p experiment**: top_p defers stops aggressively -- wb=1 might now be viable for much lower latency. Test on A40.
+- [x] **SimulStream API verified**: `load_model(SimpleNamespace)`, HTTP endpoints documented, session management understood. Our wrapper is compatible.
+- [x] **LongYAAL formula verified**: tau_YAAL uses strict `< source_length` (our code is correct), gamma uses `max(|Y_hyp|, |Y_ref|)`.
 
 ### Unported from iwslt26-sst (see audit)
 

@@ -218,6 +218,36 @@ def write_simuleval_jsonl_file(
     )
 
 
+def compute_longyaal_from_entries(entries: List[SimulEvalEntry]) -> Dict[str, float]:
+    """Compute LongYAAL from SimulEval entries -- local validation.
+
+    This replicates OmniSTEval's YAALScorer.score() logic to verify
+    our output would produce correct LongYAAL values before submission.
+
+    Args:
+        entries: SimulEvalEntry list from eval_result_to_simuleval()
+
+    Returns:
+        Dict with per-entry and average LongYAAL values:
+        {"per_entry": [...], "average": float, "n_entries": int}
+    """
+    from .metrics import compute_longyaal_ms
+
+    per_entry = []
+    for entry in entries:
+        n_words = len(entry.prediction.split()) if entry.prediction else 0
+        ly = compute_longyaal_ms(entry.delays, entry.source_length, n_words)
+        per_entry.append(ly)
+
+    avg = sum(per_entry) / len(per_entry) if per_entry else 0.0
+    return {
+        "per_entry": per_entry,
+        "average_ms": avg,
+        "average_s": avg / 1000.0,
+        "n_entries": len(per_entry),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Legacy emission event format (for SimulStream compatibility)
 # ---------------------------------------------------------------------------

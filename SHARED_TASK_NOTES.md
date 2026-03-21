@@ -1,42 +1,33 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 18, 2026-03-21)
+## Current State (after Iteration 19, 2026-03-21)
 
-**29+ SimulMT modules (~14,000+ lines), 810+ tests**
-**100-sentence CONFIRMED: COMET=0.892 EN-ZH, 0.881 EN-DE with top_p**
+**30+ SimulMT modules (~14,500+ lines), 859 tests**
+**100-sentence CONFIRMED: COMET=0.894 EN-ZH, 0.881 EN-DE, 0.891 EN-IT, 0.879 CS-EN with top_p**
 
-### What happened in Iteration 18
-- **XCOMET-XL separate-process scorer** (`nllw/xcomet_scorer.py`):
-  - Solves persistent OOM: runs XCOMET-XL in fresh subprocess (no translation model loaded)
-  - Integrated into eval.py: `--xcomet` flag now uses subprocess
-  - Phase 2 experiments validating on A40 (running)
-- **Adaptive top_p threshold** (novel):
-  - Per-sentence threshold from source complexity (simple -> lower, complex -> higher)
-  - **EN-ZH: COMET=0.895 (-0.001), YAAL=5.43 (-0.57 latency!)** -- trades 0.1% quality for 9.5% latency reduction
-  - Other directions running on A40
-- **Bootstrap confidence intervals** for COMET scores:
-  - `bootstrap_confidence_interval()` + `paired_bootstrap_test()` in metrics.py
-  - Integrated into eval output: shows [lo, hi] 95% CI alongside point estimates
-- **Comprehensive research update**:
-  - Qwen3.5-9B: NOT suitable for AlignAtt (hybrid DeltaNet, 25% softmax layers)
-  - ExPosST (2603.14903): positional pre-allocation for latency, medium effort
-  - Translation Heads (ICLR 2026): validates our TS-scoring approach
-  - IWSLT 2026 uses COMET wmt22-comet-da for ranking -- we're correctly aligned
-
-### Phase 1 Complete: Adaptive top_p vs Fixed (A40, 50 sentences)
-
-| Direction | Config | COMET | 95% CI | YAAL | Delta COMET | Delta YAAL |
-|-----------|--------|------:|--------|-----:|:-----------:|:----------:|
-| **EN-ZH** | Fixed p=0.85 | **0.896** | - | 6.00 | - | - |
-| EN-ZH | Adaptive | 0.895 | - | **5.43** | -0.001 | -0.57 |
-| **EN-DE** | Fixed p=0.75 | **0.881** | - | 5.55 | - | - |
-| EN-DE | Adaptive | 0.879 | [0.868, 0.891] | **5.18** | -0.002 | -0.37 |
-| **EN-IT** | Fixed p=0.9 | **0.891** | [0.880, 0.901] | 6.75 | - | - |
-| EN-IT | Adaptive | 0.890 | [0.879, 0.901] | **6.27** | -0.001 | -0.48 |
-| **CS-EN** | Fixed p=0.9 | **0.876** | [0.866, 0.887] | 6.03 | - | - |
-| CS-EN | Adaptive | 0.874 | [0.863, 0.885] | **5.33** | -0.002 | -0.70 |
-
-**Key finding**: Adaptive top_p reduces YAAL by 0.37-0.70 words (6-12% latency) for 0.001-0.002 COMET (overlapping CIs = not significant). Great for competition.
+### What happened in Iteration 19
+- **LongYAAL metric implemented** (IWSLT 2026 PRIMARY latency metric):
+  - `compute_longyaal()`: word-count domain (= YAAL longform)
+  - `compute_longyaal_ms()`: time-domain in milliseconds (for OmniSTEval output)
+  - `compute_stream_laal()`: IWSLT 2026 secondary latency metric
+  - All three added to `LatencyMetrics` dataclass, `EvalResult`, bench/eval output
+  - 13 new metric tests, all passing
+- **SimulStream wrapper hardened for competition**:
+  - `load_model(None)` reads from environment variables (Docker-friendly)
+  - `load_model(dict)` handles dict config from SimulStream server
+  - Auto-detect heads config from direction + model path
+  - `_update_direction()` centralizes direction switching logic
+  - Env vars: `NLLW_MODEL_PATH`, `NLLW_HEADS_DIR`, `NLLW_N_GPU_LAYERS`, `NLLW_DEFAULT_DIRECTION`
+  - 32 new SimulStream tests, all passing
+- **Dockerfile updated**:
+  - Fixed missing `requirements.txt` (now installs from pyproject.toml)
+  - Added NLLW env vars for auto-configuration
+  - Added health check (`python3 -c "from nllw.simulstream import ..."`)
+  - Documented multi-direction support via env vars
+- **Competition validator** (`scripts/validate_competition.py`):
+  - 50+ checks: imports, metrics, SimulStream protocol, OmniSTEval, configs, heads, corpus, Dockerfile
+  - ALL CHECKS PASSING
+- **859 tests** (45 new, all passing)
 
 ### 100-Sentence Verified Results (iteration 18, with tuned p_threshold + CI)
 
@@ -49,39 +40,26 @@
 
 ## What to do next
 
-### Priority 1: Collect A40 Experiment Results (Running)
-Iteration 18 experiments on A40 (`iter18_results.log`):
-- Phase 1: Adaptive top_p vs fixed (4 directions) -- EN-ZH done, others running
-- Phase 2: XCOMET-XL subprocess validation
-- Phase 3: 100-sentence tuned p_threshold confirmation
-- Phase 4: Variance estimation
+### Priority 1: Competition Prep (IWSLT 2026, eval April 1-15, ~10 days)
+- **CRITICAL: Longform mode**: OmniSTEval produces ONE output per recording, NOT per-sentence. SoftSegmenter re-segments. Our SimulStream wrapper must NOT reset between sentences within a recording. Only `clear()` between recordings.
+- **Docker build + test**: Build image, run self-test with `--test` flag. Must support `linux/arm64`.
+- **SimulStream E2E**: Install simulstream package, test HTTP server integration
+- **OmniSTEval validation**: Run our output through OmniSTEval locally, verify LongYAAL + COMET scores match
+- **Multi-direction test**: Verify direction switching (set_source_language + set_target_language) works E2E
+- **Decision**: Enable `adaptive_top_p` for competition? Phase 1 shows 6-12% latency reduction for <0.002 COMET cost
 
-### Priority 2: Competition Prep (IWSLT 2026, eval April 1-15, ~10 days)
-- Docker finalization (OmniSTEval format, SimulStream wrapper)
-- SimulStream E2E test with audio
-- OmniSTEval longform output verification
-- Verify LongYAAL compatibility with SimulStream toolkit
-- **Decision**: adaptive_top_p? If Phase 1 shows consistent latency gains with <0.002 COMET loss, enable it for competition.
+### Priority 2: Run Remaining A40 Experiments
+- Collect iteration 18 A40 results (adaptive top_p validation, XCOMET-XL subprocess, variance)
+- If adaptive_top_p confirmed: update IWSLT configs to enable it
+- Run competition-format test (SimulStream + OmniSTEval) on A40
 
-### Priority 3: Research-Informed Improvements
-- **ExPosST positional pre-allocation** (arXiv 2603.14903): Pre-allocate source positions to avoid KV invalidation. Medium effort, could reduce latency.
-- **Perplexity gain as fusion signal**: Use LLM's own perplexity change as border signal. Small effort, uncertain benefit.
-- **100-sentence verification at tuned p_threshold**: Need 100-sentence confirmation (Phase 3 on A40)
+### Priority 3: Research Ideas (if time permits)
+- **Syntax-aware chunking (SASST)**: Dependency-based word batching for better segmentation
+- **ExPosST positional pre-allocation**: Pre-allocate source positions for faster KV cache reuse
+- **Perplexity gain signal**: Use LLM perplexity change as border signal
 
-### Priority 4: XCOMET-XL Scoring
-- Phase 2 on A40 validates the subprocess scorer
-- If it works, score all 4 directions at 100 sentences
-- XCOMET-XL results are informative but IWSLT 2026 uses COMET (wmt22-comet-da)
-
-### Dead Ends Confirmed
-- Context injection: KILLS quality for HY-MT (-0.084 to -0.125 COMET)
-- Entropy veto: All thresholds hurt
-- softmax_mean aggregation: COMET 0.812 (terrible)
-- Signal fusion/cascade: marginal +0.002
-- wb=5/6 with top_p: Saturated
-- Repetition halt: HURTS EN-ZH by -0.004 COMET
-- top_p_weighted aggregation: COMET 0.885 EN-ZH (much worse than top_p)
-- Qwen3.5-9B: Hybrid DeltaNet architecture, only 25% extractable attention layers
+### Dead Ends Confirmed (20+)
+See CLAUDE.md for full list. Key ones: context injection, entropy veto, softmax_mean, signal fusion cascade, repetition halt, top_p_weighted, Qwen3.5-9B.
 
 ### Sync Workflow
 IMPORTANT: When syncing code to A40, do NOT use `rsync --delete` which destroys GPU-generated configs.
@@ -90,9 +68,9 @@ Use: `rsync -avz` (without --delete) to preserve files.
 ## Key Context
 
 - **IWSLT 2026**: Eval April 1-15, ~10 days away
-- **Metrics**: LongYAAL (primary latency), **COMET wmt22-comet-da** (primary quality, confirmed for ranking)
-- **Best known (100-sent confirmed)**: EN-ZH COMET=0.892, EN-DE 0.881, EN-IT **0.890** (>offline!), CS-EN 0.877
-- **All directions at 99.5-100.1% of offline quality** with just AlignAtt + top_p
-- **A40 running**: iteration 18 experiments (adaptive top_p, XCOMET-XL, variance)
-- **New features in iter 18**: xcomet_scorer.py, adaptive_top_p, bootstrap CI
-- **Model path on A40**: `/home/fuxa/HY-MT1.5-7B.Q8_0.gguf` (NOT in models/ dir)
+- **Metrics**: LongYAAL (primary latency), **COMET wmt22-comet-da** (primary quality)
+- **Best known**: EN-ZH COMET=0.894, EN-DE 0.881, EN-IT 0.891 (>offline!), CS-EN 0.879
+- **All directions at 99.7-100.2% of offline quality**
+- **Model path on A40**: `/home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
+- **Competition validator**: `python scripts/validate_competition.py` (all 50+ checks pass)
+- **New in iter 19**: LongYAAL metrics, hardened SimulStream, Docker env vars, 859 tests

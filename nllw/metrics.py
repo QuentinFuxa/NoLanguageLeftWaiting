@@ -6,9 +6,12 @@ Latency metrics:
     - AL (Average Lagging): Standard latency metric from Ma et al. (2019)
     - LAAL (Length-Adaptive AL): Corrected for length differences
     - YAAL: OmniSTEval formula used as IWSLT 2026 primary latency metric
+    - LongYAAL: YAAL in longform mode (IWSLT 2026 primary latency metric)
+    - LongYAAL_ms: Time-domain LongYAAL (milliseconds, for OmniSTEval)
     - AP (Average Proportion): Proportion of source read before each target word
     - DAL (Differentiable AL): Smooth approximation of AL
     - MaxCW (Max Consecutive Wait): Longest streak without output
+    - StreamLAAL: Secondary latency metric for IWSLT 2026
 
 Quality metrics (wrappers):
     - BLEU (via sacrebleu)
@@ -23,14 +26,17 @@ import math
 @dataclass
 class LatencyMetrics:
     """Collection of latency metrics for a single sentence."""
-    al: float = 0.0        # Average Lagging
-    laal: float = 0.0      # Length-Adaptive AL
-    yaal: float = 0.0      # OmniSTEval YAAL
-    ap: float = 0.0        # Average Proportion
-    dal: float = 0.0       # Differentiable AL
-    max_cw: int = 0        # Max Consecutive Wait
-    n_source: int = 0      # Source length (words)
-    n_target: int = 0      # Target length (words)
+    al: float = 0.0           # Average Lagging
+    laal: float = 0.0         # Length-Adaptive AL
+    yaal: float = 0.0         # OmniSTEval YAAL (shortform)
+    longyaal: float = 0.0     # LongYAAL: IWSLT 2026 PRIMARY latency metric
+    longyaal_ms: float = 0.0  # LongYAAL in milliseconds (for OmniSTEval output)
+    stream_laal: float = 0.0  # StreamLAAL: IWSLT 2026 secondary latency metric
+    ap: float = 0.0           # Average Proportion
+    dal: float = 0.0          # Differentiable AL
+    max_cw: int = 0           # Max Consecutive Wait
+    n_source: int = 0         # Source length (words)
+    n_target: int = 0         # Target length (words)
 
 
 def compute_al(delays: List[float], source_length: int, target_length: int) -> float:
@@ -115,6 +121,114 @@ def compute_yaal(
     return yaal / tau if tau > 0 else 0.0
 
 
+def compute_longyaal(
+    delays: List[float],
+    source_length: float,
+    target_length: int,
+) -> float:
+    """LongYAAL -- IWSLT 2026 PRIMARY latency metric (word-count domain).
+
+    LongYAAL = YAAL in longform mode: counts ALL target words, including those
+    emitted after the source ends. This is the key metric IWSLT 2026 uses for
+    ranking systems within quality tiers.
+
+    Equivalent to compute_yaal(..., is_longform=True).
+
+    From OmniSTEval (arXiv 2509.17349):
+        gamma = max(len(delays), target_length) / source_length
+        longyaal = (1/tau) * sum_{t=0}^{tau-1} [d_t - t/gamma]
+
+    Args:
+        delays: Per-target-word delay values (word-count domain: how many
+                source words read before emitting target word t)
+        source_length: Number of source words
+        target_length: Number of target words
+
+    Returns:
+        LongYAAL score in word-count domain (lower is better)
+    """
+    return compute_yaal(delays, source_length, target_length, is_longform=True)
+
+
+def compute_longyaal_ms(
+    delays_ms: List[float],
+    source_length_ms: float,
+    target_length: int,
+) -> float:
+    """LongYAAL in milliseconds -- for OmniSTEval evaluation output.
+
+    IWSLT 2026 evaluation uses time-domain delays (milliseconds) rather than
+    word-count delays. This function computes LongYAAL directly from ms delays.
+
+    Args:
+        delays_ms: Per-target-word emission timestamps in milliseconds.
+                   delays_ms[t] = time when target word t was emitted.
+        source_length_ms: Total source audio duration in milliseconds.
+        target_length: Number of target words.
+
+    Returns:
+        LongYAAL in milliseconds (lower is better).
+        Divide by 1000 to get seconds.
+    """
+    if not delays_ms or source_length_ms == 0:
+        return 0.0
+
+    gamma = max(len(delays_ms), target_length) / source_length_ms
+    total = 0.0
+    tau = 0
+    for t, d in enumerate(delays_ms):
+        total += d - t / gamma
+        tau += 1
+
+    return total / tau if tau > 0 else 0.0
+
+
+def compute_stream_laal(
+    delays: List[float],
+    source_length: float,
+    target_length: int,
+) -> float:
+    """StreamLAAL -- IWSLT 2026 secondary latency metric.
+
+    StreamLAAL extends LAAL for streaming scenarios by using monotonized
+    delays and handling the case where target length differs from source.
+
+    Formula from OmniSTEval:
+        gamma = max(len(delays), target_length) / source_length
+        Monotonize: g'(t) = max(g(t), g'(t-1) + 1/gamma)
+        stream_laal = (1/tau) * sum [g'(t) - t/gamma] for t where g'(t) < source_length
+
+    Args:
+        delays: Per-target-word delay values
+        source_length: Source length
+        target_length: Target length
+
+    Returns:
+        StreamLAAL score (lower is better)
+    """
+    if not delays or source_length == 0:
+        return 0.0
+
+    gamma = max(len(delays), target_length) / source_length
+
+    # Monotonize delays
+    mono = [delays[0]]
+    step = 1.0 / gamma if gamma > 0 else 0.0
+    for t in range(1, len(delays)):
+        mono.append(max(delays[t], mono[-1] + step))
+
+    # Sum over tokens where monotonized delay < source_length
+    total = 0.0
+    tau = 0
+    for t, d in enumerate(mono):
+        if d >= source_length:
+            break
+        total += d - t / gamma
+        tau += 1
+
+    return total / tau if tau > 0 else 0.0
+
+
 def compute_ap(delays: List[float], source_length: int, target_length: int) -> float:
     """Average Proportion.
 
@@ -170,22 +284,33 @@ def compute_all_metrics(
     source_length: int,
     target_length: int,
     is_longform: bool = True,
+    delays_ms: Optional[List[float]] = None,
+    source_length_ms: Optional[float] = None,
 ) -> LatencyMetrics:
     """Compute all latency metrics at once.
 
     Args:
-        delays: Delay values for each target word
+        delays: Delay values for each target word (word-count domain)
         source_length: Number of source words
         target_length: Number of target words
         is_longform: Whether to use longform YAAL
+        delays_ms: Optional time-domain delays (ms) for LongYAAL_ms
+        source_length_ms: Optional source duration (ms) for LongYAAL_ms
 
     Returns:
         LatencyMetrics dataclass with all values
     """
+    longyaal_ms_val = 0.0
+    if delays_ms is not None and source_length_ms is not None:
+        longyaal_ms_val = compute_longyaal_ms(delays_ms, source_length_ms, target_length)
+
     return LatencyMetrics(
         al=compute_al(delays, source_length, target_length),
         laal=compute_laal(delays, source_length, target_length),
         yaal=compute_yaal(delays, source_length, target_length, is_longform),
+        longyaal=compute_longyaal(delays, source_length, target_length),
+        longyaal_ms=longyaal_ms_val,
+        stream_laal=compute_stream_laal(delays, source_length, target_length),
         ap=compute_ap(delays, source_length, target_length),
         dal=compute_dal(delays, source_length, target_length),
         max_cw=compute_max_consecutive_wait(delays),
