@@ -36,7 +36,18 @@ nllw/
 6. At sentence boundary: commit translation, reset context, start next segment
 7. KV cache reuse: only re-decode changed tokens (3-5x speedup)
 
-### Best Known Results (from iwslt26-sst, March 2026)
+### Best Known Results
+
+**NLLW results (COMET wmt22-comet-da, FLORES, 100 sentences, A40):**
+
+| Direction | Model | COMET | YAAL | Config |
+|-----------|-------|:-----:|:----:|--------|
+| EN-ZH | HY-MT1.5-7B | **0.892** | 5.58 | bd=3, wb=5, top_p aggregation TBD |
+| EN-DE | HY-MT1.5-7B | 0.873 | 5.16 | bd=3, wb=4 |
+| EN-IT | HY-MT1.5-7B | 0.885 | 5.21 | bd=3, wb=4 |
+| CS-EN | HY-MT1.5-7B | 0.857 | 2.77 | bd=3, wb=2 |
+
+**Previous iwslt26-sst results (XCOMET-XL, different metric):**
 
 | Direction | Model | XCOMET-XL | Config |
 |-----------|-------|:---------:|--------|
@@ -51,11 +62,15 @@ nllw/
 - LoRA no-think block (-0.178 COMET)
 - GDN warm-start (33 hallucinations)
 - Extra glossary (hurts small models)
-- HY-MT context injection (hurts ALL 4 directions)
+- HY-MT context injection (hurts ALL 4 directions: EN-DE -0.084, EN-IT -0.125, CS-EN -0.107)
 - Confidence-based stopping alone (COMET 0.468)
 - Fixed-rate tokens (COMET 0.293-0.334)
 - TAF source lookahead (worse on EN-ZH)
 - Seed-X-PPO-7B, Qwen3-4B-2507, HY-MT1.5-1.8B, TranslateGemma-4B (all inferior)
+- Entropy veto threshold (all thresholds hurt: 0.5->0.494, 0.75->0.589, 1.0->0.683)
+- softmax_mean aggregation (COMET 0.812 vs ts_vote 0.879)
+- Signal fusion / cascade (marginal +0.002 COMET, not worth complexity)
+- Boolean cascade signals (coverage causes latency explosion)
 
 ---
 
@@ -129,7 +144,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~13,000 lines across 28 SimulMT modules, 731 tests
+### What exists now: ~13,000 lines across 28 SimulMT modules, 755 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -200,11 +215,11 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 ### Key parameters and their optimal values
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| `border_distance` | 3 | Per-direction: EN-ZH=3, EN-IT=4, CS-EN=2 |
-| `word_batch` | 3 | wb=2 hallucinates on some inputs; wb=3 safer |
-| `context_window` | 0 | HY-MT: context hurts (-0.028). Qwen3.5: helps (+0.037) |
-| `entropy_veto_threshold` | None | Optional, 0.75 recommended. Catches uncertain tokens. |
-| `aggregation` | "ts_vote" | 9 methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble |
+| `border_distance` | 3 | Per-direction: EN-ZH=2-3, EN-DE=2-3, EN-IT=2-3, CS-EN=3. Lower bd improves quality. |
+| `word_batch` | 3 | **wb=5 is best for quality** (+0.012 COMET). wb=4 is good balanced. wb=3 for low latency. |
+| `context_window` | 0 | **HY-MT: context KILLS quality** (-0.084 to -0.125 COMET for EN-DE/IT/CS). Never use with HY-MT. |
+| `entropy_veto_threshold` | None | **Dead end**: all thresholds hurt (0.5->0.494, 1.0->0.683). Do not use. |
+| `aggregation` | "ts_vote" | **top_p is best** (COMET 0.886 vs ts_vote 0.879). geomean second (0.881). 10 methods total. |
 | `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
 | `ssbd_beta` | None | SSBD bias for LA backend. None=disabled, 0.0=pure speculative, 0.2=recommended |
@@ -238,19 +253,29 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 3. **Thread safety**: `threading.Lock` around all llama_context operations.
 4. **Stderr suppression**: Metal JIT logs flood TUI. Wrap decode calls with `suppress/restore_stderr`.
 
-### Quality metrics (2026-03-20 baseline)
-| Direction | BLEU | COMET (est) | Committed% |
-|-----------|------|-------------|------------|
-| EN→FR | ~11 | ~0.75 | 63% |
-| FR→EN | ~71 | ~0.85 | 77% |
+### Quality metrics (2026-03-21, FLORES, A40, COMET wmt22-comet-da)
+| Direction | bd | wb | agg | BLEU | COMET | YAAL | % of offline |
+|-----------|---:|---:|-----|-----:|------:|-----:|:------------:|
+| **EN-ZH** | 3 | 4 | top_p | 41.5 | **0.895** | 4.67 | **99.9%** |
+| EN-ZH | 3 | 5 | ts_vote | 39.3 | 0.892 | 5.58 | 99.6% |
+| **EN-DE** | 2 | 3 | top_p | 28.4 | **0.881** | 4.06 | 99.7% |
+| EN-DE | 3 | 4 | top_p | 27.0 | 0.881 | 5.16 | 99.7% |
+| **EN-IT** | 2 | 3 | top_p | 24.0 | **0.884** | 4.20 | 99.4% |
+| EN-IT | 3 | 4 | ts_vote | 22.1 | 0.885 | 5.21 | 99.6% |
+| **CS-EN** | 3 | 3 | top_p | 29.5 | **0.876** | 3.27 | 99.4% |
+| CS-EN | 3 | 2 | ts_vote | 22.6 | 0.857 | 2.77 | 97.3% |
 
-### Key findings from iwslt26-sst (see docs/research/iwslt26-sst-findings.md)
-- **HY-MT1.5-7B champion**: 0.842 XCOMET-XL EN-ZH, beats Qwen3.5 by +0.039
-- **AlignAtt is critical**: Without it, COMET collapses 0.87 → 0.29-0.47
+### Key findings
+- **wb=5 is the quality champion**: COMET 0.892 EN-ZH (+0.012 over wb=3)
+- **top_p aggregation helps**: COMET 0.886 vs ts_vote 0.879 at same bd/wb
+- **Lower bd improves quality**: bd=2 better than bd=3 for EN-DE/EN-IT
+- **HY-MT1.5-7B is best model**: beats all other tested models
+- **AlignAtt is critical**: Without it, COMET collapses 0.87 -> 0.29-0.47
 - **KV cache reuse**: 3-5x speedup, zero quality loss
-- **15+ failed experiments documented**: EAST, LoRA no-think, GDN warm-start, confidence stopping, etc.
-- **Context helps Qwen3.5 (+0.037) but hurts HY-MT (-0.028)**
-- **XCOMET-XL amplifies differences 39x vs wmt22** — use the right metric!
+- **Context KILLS HY-MT quality**: -0.084 to -0.125 COMET (dead end)
+- **Entropy veto is dead**: all thresholds hurt quality significantly
+- **20+ failed experiments documented**: EAST, LoRA, GDN, confidence, signals, etc.
+- **XCOMET-XL amplifies differences 39x vs wmt22** -- use the right metric!
 
 ---
 

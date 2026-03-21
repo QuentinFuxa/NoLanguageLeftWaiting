@@ -133,6 +133,7 @@ def detect_heads(
     batch_heads: int = 0,
     skip_gdn_layers: bool = False,
     ts_threshold: float = DEFAULT_TS_THRESHOLD,
+    n_gpu_layers: int = 99,
     verbose: bool = True,
 ) -> dict:
     """Detect token alignment heads for a GGUF model.
@@ -179,7 +180,7 @@ def detect_heads(
     if verbose:
         print(f"Loading model: {model_path}", file=sys.stderr)
     ll.init()
-    model = ll.load_model(model_path, n_gpu_layers=99)
+    model = ll.load_model(model_path, n_gpu_layers=n_gpu_layers)
     vocab = ll.get_vocab(model)
     nv = ll.n_vocab(vocab)
     eos_id = ll.vocab_eos(vocab)
@@ -260,7 +261,8 @@ def detect_heads(
             n_pairs_batch = b_end - b_start
 
             # Create context with attention extraction
-            ctx = ll.create_context(model, n_ctx=n_ctx, attn_weights=True)
+            ctx = ll.create_context(model, n_ctx=n_ctx, attn_weights=True,
+                                     n_gpu_layers=n_gpu_layers)
             ll.set_attn_heads(ctx, b_layers, b_heads)
 
             # Decode prompt
@@ -518,6 +520,8 @@ Examples:
                         help="Skip GDN/linear-attention layers (for Qwen3.5 hybrid)")
     parser.add_argument("--ts-threshold", type=float, default=DEFAULT_TS_THRESHOLD,
                         help=f"Min TS score for alignment heads (default {DEFAULT_TS_THRESHOLD})")
+    parser.add_argument("--n-gpu-layers", type=int, default=99,
+                        help="GPU layers to offload (0=CPU, 99=all)")
     args = parser.parse_args()
 
     # Auto-name output
@@ -543,6 +547,7 @@ Examples:
         batch_heads=args.batch_heads,
         skip_gdn_layers=args.skip_gdn_layers,
         ts_threshold=args.ts_threshold,
+        n_gpu_layers=args.n_gpu_layers,
     )
 
     # Save JSON
