@@ -58,6 +58,8 @@ def parse_sweep_spec(spec: str) -> Dict[str, List[Any]]:
         "dynbd": "dynamic_border",
         "ssbd": "ssbd_beta",
         "mask": "display_mask_k",
+        "forced": "la_forced_decode",
+        "adaptive": "adaptive_ssbd",
     }
 
     grid = {}
@@ -113,6 +115,8 @@ def run_benchmark(args):
         aggregation=args.aggregation,
         dynamic_border=args.dynamic_border,
         ssbd_beta=args.ssbd_beta,
+        la_forced_decode=args.forced_decode,
+        adaptive_ssbd=args.adaptive_ssbd,
     )
 
     backend = create_backend(config)
@@ -247,12 +251,17 @@ def main():
                         help="Entropy veto threshold (None=disabled)")
     parser.add_argument("--aggregation", default="ts_vote",
                         choices=["ts_vote", "softmax_mean", "entropy_weighted",
-                                 "consensus", "geomean", "top_p", "ensemble"],
+                                 "consensus", "geomean", "top_p", "ensemble",
+                                 "gaussian_kernel", "gaussian_kernel_continuous"],
                         help="Attention aggregation method for border detection")
     parser.add_argument("--dynamic-border", action="store_true",
                         help="Enable entropy-based dynamic border distance")
     parser.add_argument("--ssbd-beta", type=float, default=None,
                         help="SSBD bias (0.0=pure speculative, 0.2=recommended, None=disabled)")
+    parser.add_argument("--forced-decode", action="store_true",
+                        help="Enable LA forced decoding of committed prefix (CUNI approach)")
+    parser.add_argument("--adaptive-ssbd", action="store_true",
+                        help="Enable entropy-based adaptive SSBD beta (per-token)")
 
     # Metrics
     parser.add_argument("--comet", action="store_true")

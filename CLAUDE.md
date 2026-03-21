@@ -128,13 +128,13 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-20)
 
-### What exists now: ~7,800 lines across 21 SimulMT modules, 199 tests
+### What exists now: ~8,300 lines across 21 SimulMT modules, 244 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
 |---------|------|------|---------|
 | `alignatt` | Primary | `nllw/alignatt_backend.py` (462 lines) | Attention-based border detection + entropy veto + KV cache reuse |
-| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~550 lines) | LocalAgreement + AlignAtt + SSBD: re-translate, diff, commit stable prefix |
+| `alignatt-la` | Hybrid | `nllw/alignatt_la_backend.py` (~750 lines) | LocalAgreement + AlignAtt + SSBD + forced decoding + adaptive SSBD |
 | `wait-k` | Baseline | `nllw/baselines.py` (175 lines) | Standard wait-k policy baseline |
 | `fixed-rate` | Baseline | `nllw/baselines.py` | Fixed-interval emission |
 | `full-sentence` | Baseline | `nllw/alignatt_backend.py` | Quality upper bound (offline) |
@@ -156,7 +156,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `omnisteval.py` | 258 | OmniSTEval JSONL output format for IWSLT submission |
 | `research.py` | 191 | Compute-aware latency (CA-AL, CA-YAAL), benchmark suite |
 | `prompts.py` | 354 | Prompt format registry (frozen dataclasses) |
-| `alignatt.py` | 654 | Core border detection + 7 aggregation methods + dynamic border + ensemble |
+| `alignatt.py` | 746 | Core border detection + 9 aggregation methods + dynamic border + ensemble + gaussian kernel |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
@@ -164,8 +164,10 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 - `alignatt_la_backend.py` (~550 lines) -- LocalAgreement + AlignAtt + SSBD hybrid backend
 - 22 alignment head configs in `nllw/heads/` (HY-MT, Qwen3, Qwen3.5, EuroLLM, Tower, TranslateGemma)
 - Context injection (rolling buffer of previous translations)
-- 7 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, ensemble
+- 9 aggregation methods: ts_vote, softmax_mean, entropy_weighted, consensus, geomean, top_p, gaussian_kernel, gaussian_kernel_continuous, ensemble
 - SSBD (Self-Speculative Biased Decoding): previous translation as draft, batch verify, 1.3-1.7x speedup
+- LA Forced Decoding: force-decode committed prefix for consistency + speed (CUNI approach)
+- Adaptive SSBD Beta: per-token entropy-based bias modulation (confident=lenient, uncertain=strict)
 
 **Not yet built (planned):**
 - `lora.py` -- LoRA adapter loading
@@ -182,6 +184,8 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
 | `ssbd_beta` | None | SSBD bias for LA backend. None=disabled, 0.0=pure speculative, 0.2=recommended |
+| `la_forced_decode` | False | Force-decode committed prefix in LA backend (CUNI approach) |
+| `adaptive_ssbd` | False | Entropy-based per-token SSBD beta modulation |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
 | `min_commit` | `n_words//4` | Guarantees progress per translate() call |
 

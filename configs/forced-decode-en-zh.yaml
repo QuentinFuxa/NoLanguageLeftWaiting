@@ -1,0 +1,29 @@
+# LA Forced Decoding test: committed prefix conditioning
+# CUNI approach (Polak et al., 2025): force-decode committed tokens
+name: forced-decode-en-zh
+backend:
+  type: alignatt-la
+  model: /path/to/HY-MT1.5-7B-Q5_K_M.gguf
+  border_distance: 3
+  word_batch: 3
+  la_forced_decode: true
+eval:
+  direction: en-zh
+  n_sentences: 50
+  suite: flores
+  comet: true
+notes: >
+  Compare LA backend with and without forced decoding.
+
+  Run with:
+  python -m nllw.bench --backend alignatt-la --lang en-zh --comet --save
+  python -m nllw.bench --backend alignatt-la --forced-decode --lang en-zh --comet --save
+
+  Expected: forced decoding should be faster (fewer autoregressive tokens)
+  and potentially more consistent (model conditioned on committed prefix).
+  May slightly hurt translation quality if committed prefix was suboptimal.
+tags:
+  - la
+  - forced_decode
+  - cuni
+  - en-zh

@@ -51,6 +51,17 @@ class BackendConfig:
     # Display-only mask-k: hide last k tokens from display but keep as draft
     # Reduces output flicker (NE) while maintaining SSBD speedup. 0 = disabled.
     display_mask_k: int = 0
+    # LA forced decoding: force-decode committed prefix before generating.
+    # Instead of generating from scratch, conditions on committed tokens.
+    # Reduces computation (only generate new tokens) and improves consistency.
+    # CUNI approach (Polak et al., 2025). False = standard re-translation.
+    la_forced_decode: bool = False
+    # Adaptive SSBD beta: dynamically adjust beta based on model entropy.
+    # When True and ssbd_beta is set, beta scales per-token:
+    #   confident (low entropy) -> higher beta (more lenient)
+    #   uncertain (high entropy) -> lower beta (stricter)
+    # Combines SSBD (2509.21740) with entropy-modulated confidence (2508.15371).
+    adaptive_ssbd: bool = False
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)
