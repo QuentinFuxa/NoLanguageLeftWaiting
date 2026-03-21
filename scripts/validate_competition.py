@@ -327,6 +327,45 @@ def validate_omnisteval():
     return ok
 
 
+def validate_novel_features():
+    """Check novel features from iterations 20-24 are properly wired."""
+    print("\n=== Novel Features (iter 20-24) ===")
+    ok = True
+
+    from nllw.backend_protocol import BackendConfig
+    cfg = BackendConfig()
+
+    # Iteration 20: perplexity-adaptive border
+    ok &= check("perplexity_adaptive_bd field", hasattr(cfg, 'perplexity_adaptive_bd'))
+    ok &= check("perplexity_bd_low field", hasattr(cfg, 'perplexity_bd_low'))
+
+    # Iteration 21: source-aware batching
+    ok &= check("source_aware_batching field", hasattr(cfg, 'source_aware_batching'))
+
+    # Iteration 22: batch_first_emission_time + avg_logprob
+    from nllw.backend_protocol import TranslationStep
+    step = TranslationStep(text="test")
+    ok &= check("batch_first_emission_time field", hasattr(step, 'batch_first_emission_time'))
+    ok &= check("avg_logprob field", hasattr(step, 'avg_logprob'))
+
+    # Iteration 23: confidence-adaptive wb + language-pair gen cap
+    ok &= check("confidence_adaptive_wb field", hasattr(cfg, 'confidence_adaptive_wb'))
+    ok &= check("confidence_wb_high field", hasattr(cfg, 'confidence_wb_high'))
+    ok &= check("language_pair_gen_cap field", hasattr(cfg, 'language_pair_gen_cap'))
+
+    # Iteration 24: entropy-gated top_p
+    ok &= check("entropy_gated_top_p field", hasattr(cfg, 'entropy_gated_top_p'))
+    from nllw.alignatt import merged_attention_entropy, entropy_gated_top_p_threshold
+    import numpy as np
+    test_attn = np.ones((3, 5)) / 5
+    m_ent = merged_attention_entropy(test_attn, [1.0, 0.5, 0.3])
+    ok &= check("merged_attention_entropy computes", m_ent > 0, f"ent={m_ent:.3f}")
+    gated = entropy_gated_top_p_threshold(0.85, m_ent)
+    ok &= check("entropy_gated_top_p_threshold computes", 0.5 <= gated <= 0.99, f"gated={gated:.3f}")
+
+    return ok
+
+
 def validate_configs():
     """Check IWSLT 2026 YAML configs exist and are valid."""
     print("\n=== IWSLT 2026 Configs ===")
@@ -441,6 +480,7 @@ def main():
     all_ok &= validate_metrics()
     all_ok &= validate_simulstream()
     all_ok &= validate_omnisteval()
+    all_ok &= validate_novel_features()
     all_ok &= validate_configs()
     all_ok &= validate_heads()
     all_ok &= validate_corpus()

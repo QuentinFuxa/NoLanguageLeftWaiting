@@ -1,26 +1,26 @@
 # Shared Task Notes -- NLLW SimulMT
 
-## Current State (after Iteration 23, 2026-03-21)
+## Current State (after Iteration 24, 2026-03-21)
 
-**30+ SimulMT modules (~15,500 lines), 955 tests**
-**100-sentence CONFIRMED: COMET=0.894 EN-ZH, 0.881 EN-DE, 0.891 EN-IT, 0.879 CS-EN with top_p**
+**CRITICAL METRIC UPDATE**: Competition uses **XCOMET-XL** (Unbabel/XCOMET-XL) for quality, **StreamLAAL** for latency, **SacreBLEU** for secondary quality. NOT COMET wmt22-comet-da! (Confirmed from github.com/owaski/iwslt-2026-baselines/eval.sh)
 
-### What happened in Iteration 23
-- **Confidence-adaptive word batching** (NOVEL):
-  - Uses avg_logprob from iter 22 to adjust word_batch per translate() call
-  - Confident generation (logprob > -0.5) -> wb-1 (faster emission, lower YAAL)
-  - Uncertain generation (logprob < -2.0) -> wb+1 (more context, better quality)
+**30+ SimulMT modules (~15,700 lines), 974 tests**
+**100-sentence results (COMET wmt22): 0.894 EN-ZH, 0.881 EN-DE, 0.891 EN-IT, 0.879 CS-EN -- MUST RE-EVAL WITH XCOMET-XL**
+
+### What happened in Iteration 24
+- **Entropy-gated top_p** (NOVEL):
+  - Per-token top_p threshold modulation from merged attention entropy during generation
+  - Focused attention (low entropy) -> lower threshold -> emit sooner (lower YAAL)
+  - Spread attention (high entropy) -> higher threshold -> wait longer (better quality)
+  - Different from adaptive_top_p (per-sentence) and entropy_veto (dead end)
+  - `merged_attention_entropy()`: entropy of TS-weighted merged attention distribution
+  - `entropy_gated_top_p_threshold()`: maps entropy to scale factor [0.88, 1.08] with linear interpolation
   - Wired into both AlignAtt and AlignAtt-LA backends
-  - CLI: `--confidence-adaptive-wb`, sweep: `confwb=0,1`
+  - CLI: `--entropy-gated-top-p`, sweep: `entgtp=0,1`
+  - Only active when aggregation is "top_p" or "top_p_weighted"
   - **Needs GPU validation**
-- **Language-pair-aware gen cap**:
-  - Tighter generation limits for compact targets (EN->ZH: 0.85 ratio)
-  - Looser for verbose targets (EN->DE: 1.15 ratio)
-  - CLI: `--language-pair-gen-cap`, sweep: `lpgcap=0,1`
-  - **Needs GPU validation**
-- **avg_logprob in LA backend**: now tracked for confidence-adaptive wb
-- **8-phase GPU experiment script** (`scripts/run_iteration23_experiments.py`)
-- **955 tests** (25 new, all passing)
+- **9-phase GPU experiment script** (`scripts/run_iteration24_experiments.py`)
+- **974 tests** (19 new, all passing)
 
 ### 100-Sentence Verified Results (iteration 18, with tuned p_threshold + CI)
 
@@ -34,26 +34,27 @@
 ## What to do next
 
 ### Priority 1: RUN GPU EXPERIMENTS (URGENT -- competition in ~7 days)
-- **Run iteration 23 script on A40**:
+- **Run iteration 24 script on A40**:
   ```bash
   # Sync code to A40 first:
   rsync -avz . fuxa@quest.ms.mff.cuni.cz:nllw_deploy/ -e "ssh -p 3622"
   # Then on A40:
-  python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf
+  python scripts/run_iteration24_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf
   # Quick mode for validation:
-  python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick
+  python scripts/run_iteration24_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --quick
   # Specific phase:
-  python scripts/run_iteration23_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 3
+  python scripts/run_iteration24_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 2
   ```
 - Key experiments that NEED results:
-  - **YAAL fix validation**: batch_first_emission_time should lower YAAL
-  - **Confidence-adaptive wb**: does logprob-based wb adjustment help YAAL?
-  - **Language-pair gen cap**: does tighter gen cap improve quality?
-  - **Source-aware batching**: quality improvement from better translation units
-  - **Perplexity adaptive bd**: YAAL improvement vs quality cost
+  - **Entropy-gated top_p**: does per-token threshold modulation help YAAL without hurting COMET?
+  - **Confidence-adaptive wb** (iter 23): does logprob-based wb adjustment help YAAL?
+  - **Language-pair gen cap** (iter 23): does tighter gen cap improve quality?
+  - **Source-aware batching** (iter 21): quality improvement from better translation units?
+  - **Perplexity adaptive bd** (iter 20): YAAL improvement vs quality cost?
   - **Combined features**: test all winning features together
 
 ### Priority 2: Competition Decisions (based on GPU results)
+- **Enable entropy-gated top_p?** If YAAL improves without quality loss -> yes
 - **Enable confidence-adaptive wb?** If YAAL improves without quality loss -> yes
 - **Enable language-pair gen cap?** If COMET improves -> yes
 - **Enable perplexity adaptive bd?** If YAAL improves without quality loss -> yes
@@ -76,11 +77,25 @@ Use: `rsync -avz` (without --delete) to preserve files.
 ## Key Context
 
 - **IWSLT 2026**: Eval April 1-15, ~7 days away
-- **Metrics**: LongYAAL (primary latency), **COMET wmt22-comet-da** (primary quality)
-- **Best known**: EN-ZH COMET=0.894, EN-DE 0.881, EN-IT 0.891 (>offline!), CS-EN 0.879
-- **All directions at 99.7-100.2% of offline quality**
+- **COMPETITION METRICS** (confirmed from baselines repo):
+  - **Quality**: XCOMET-XL (Unbabel/XCOMET-XL) -- primary
+  - **Quality**: SacreBLEU -- secondary
+  - **Latency**: StreamLAAL -- primary latency
+  - **Eval tool**: `omnisteval longform` command
+  - **NOT**: COMET wmt22-comet-da (our previous assumption was WRONG)
+- **XCOMET-XL amplifies differences 39x vs wmt22** -- rankings may change significantly!
+- **Best known (wmt22 metric, needs XCOMET-XL re-eval)**: EN-ZH 0.894, EN-DE 0.881, EN-IT 0.891, CS-EN 0.879
 - **Model path on A40**: `/home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
-- **Competition validator**: `python scripts/validate_competition.py` (101+ checks pass)
-- **New in iter 23**: confidence-adaptive wb, language-pair gen cap, avg_logprob in LA backend, 955 tests
+- **Competition validator**: `python scripts/validate_competition.py` (112 checks pass)
+- **New in iter 24**: entropy-gated top_p, metric correction, 974 tests
 - **OmniSTEval format**: ONE JSONL line per recording with per-word delays in ms
-- **Gold transcripts**: `iwslt26-sst/inputs/en/acl6060.ts/gold-jsonl/` (1863 words per recording)
+
+## URGENT: GPU Tasks for Competition
+
+1. **Re-evaluate ALL directions with XCOMET-XL**:
+   ```bash
+   python -m nllw.bench --lang en-zh --xcomet --save  # all 4 directions
+   ```
+2. **Run iteration 24 experiments** (entropy-gated top_p etc)
+3. **Generate competition-format OmniSTEval output** and validate with `omnisteval longform`
+4. **Check StreamLAAL values** (we track this already but need to verify alignment with official scorer)

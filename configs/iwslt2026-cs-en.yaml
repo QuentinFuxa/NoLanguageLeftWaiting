@@ -6,7 +6,7 @@
 # Note: uses cross-lingual head transfer from en-zh (>97% TS mass)
 
 model_path: /app/models/hymt1.5-7b-q8_0.gguf
-heads_path: /app/heads/translation_heads_hymt_en_zh.json
+heads_path: /app/heads/translation_heads_hy_mt1_5_7b_q8_0_cs_en.json
 direction: cs-en
 backend_type: alignatt
 prompt_format: hymt

@@ -105,6 +105,41 @@ _HYMT_FORMATS = {
     ),
 }
 
+# HY-MT official prompt format (matches training data exactly)
+# Ref: https://huggingface.co/tencent/HY-MT1.5-7B-GGUF chat template
+# Key differences from the above: "segment" not "text", no "please only output",
+# period instead of colon, context injection removed (dead end for HY-MT).
+# NOTE: context injection KILLS HY-MT quality (-0.084 to -0.125 COMET), so
+# the official format variants have NO context injection enabled.
+_HYMT_OFFICIAL_FORMATS = {
+    ("hymt-official", "en-zh"): PromptFormat(
+        name="hymt-official-en-zh",
+        prefix="\u5c06\u4ee5\u4e0b\u6587\u672c\u7ffb\u8bd1\u4e3a\u4e2d\u6587\uff0c\u6ce8\u610f\u53ea\u9700\u8981\u8f93\u51fa\u7ffb\u8bd1\u540e\u7684\u7ed3\u679c\uff0c\u4e0d\u8981\u989d\u5916\u89e3\u91ca\u3002\n\n",
+        **_HYMT_BASE,
+    ),
+    ("hymt-official", "en-de"): PromptFormat(
+        name="hymt-official-en-de",
+        prefix="Translate the following segment into German, without additional explanation.\n\n",
+        **_HYMT_BASE,
+    ),
+    ("hymt-official", "en-it"): PromptFormat(
+        name="hymt-official-en-it",
+        prefix="Translate the following segment into Italian, without additional explanation.\n\n",
+        **_HYMT_BASE,
+    ),
+    ("hymt-official", "en-fr"): PromptFormat(
+        name="hymt-official-en-fr",
+        prefix="Translate the following segment into French, without additional explanation.\n\n",
+        **_HYMT_BASE,
+    ),
+    ("hymt-official", "cs-en"): PromptFormat(
+        name="hymt-official-cs-en",
+        prefix="Translate the following segment into English, without additional explanation.\n\n",
+        **_HYMT_BASE,
+    ),
+}
+
+
 # HY-MT context variants for EN-ZH
 _HYMT_CTX_VARIANTS = {
     ("hymt-ctx-v1", "en-zh"): PromptFormat(
@@ -296,6 +331,7 @@ _GEMMA_FORMATS = {
 # ---------------------------------------------------------------------------
 PROMPT_REGISTRY: Dict[tuple, PromptFormat] = {}
 PROMPT_REGISTRY.update(_HYMT_FORMATS)
+PROMPT_REGISTRY.update(_HYMT_OFFICIAL_FORMATS)
 PROMPT_REGISTRY.update(_HYMT_CTX_VARIANTS)
 PROMPT_REGISTRY.update(_QWEN_FORMATS)
 PROMPT_REGISTRY.update(_EUROLLM_FORMATS)

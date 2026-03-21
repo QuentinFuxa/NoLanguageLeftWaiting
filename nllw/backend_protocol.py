@@ -198,6 +198,14 @@ class BackendConfig:
     # Fusion decision threshold: fusion_score >= threshold -> WRITE (border hit).
     # 0.0 = balanced, positive = more conservative (fewer WRITE), negative = aggressive.
     fusion_threshold: float = 0.0
+    # Entropy-gated top_p (novel): per-token top_p threshold modulation
+    # based on the merged attention distribution's entropy during generation.
+    # Focused attention (low entropy) -> lower threshold -> emit sooner (lower YAAL).
+    # Spread attention (high entropy) -> higher threshold -> wait longer (better quality).
+    # Different from adaptive_top_p (per-sentence, source complexity) and
+    # entropy_veto (halts generation). This is per-TOKEN within the generation loop.
+    # Only effective when aggregation="top_p". False=disabled, True=enabled.
+    entropy_gated_top_p: bool = False
     # Perplexity-based adaptive border (Hibiki-inspired, novel for AlignAtt):
     # Adjust border_distance per translate() call based on generation confidence.
     # After each word batch, compute average perplexity from generation logits.

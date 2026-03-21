@@ -41,7 +41,9 @@ from .alignatt import (
     compute_attention_shift,
     compute_dynamic_word_batch,
     confidence_adaptive_word_batch,
+    entropy_gated_top_p_threshold,
     language_pair_gen_cap,
+    merged_attention_entropy,
     should_defer_batch,
     compute_entropy,
     compute_entropy_change,
@@ -165,8 +167,8 @@ class AlignAttBackend(SimulMTBackend):
         self._ts_scores = head_data["ts_scores"][:top_k]
         self._n_heads = top_k
 
-        # Prompt format
-        model_family = detect_model_family(config.model_path)
+        # Prompt format: use explicit config if set, otherwise auto-detect from model
+        model_family = config.prompt_format or detect_model_family(config.model_path)
         self._prompt_fmt = get_prompt_format(model_family, config.direction)
 
         # Initialize llama.cpp
@@ -468,6 +470,18 @@ class AlignAttBackend(SimulMTBackend):
                     if attn is not None and src_end <= attn.shape[1]:
                         src_attn = attn[:, src_start:src_end]
 
+                        # Entropy-gated top_p: per-token threshold adjustment
+                        # based on merged attention entropy during generation.
+                        step_top_p = effective_top_p
+                        if (self.config.entropy_gated_top_p
+                                and self.config.aggregation in ("top_p", "top_p_weighted")):
+                            m_ent = merged_attention_entropy(
+                                src_attn, self._ts_scores
+                            )
+                            step_top_p = entropy_gated_top_p_threshold(
+                                effective_top_p, m_ent,
+                            )
+
                         # Signal fusion mode: weighted scoring replaces boolean cascade
                         if self.config.signal_fusion:
                             # Track attended position for monotonicity
@@ -565,7 +579,7 @@ class AlignAttBackend(SimulMTBackend):
                                 positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
                                 monotonicity_enabled=self.config.attention_monotonicity,
                                 attn_shift_write=self._current_attn_shift_write if self.config.attention_shift else None,
-                                top_p_threshold=effective_top_p,
+                                top_p_threshold=step_top_p,
                             )
                             self._prev_step_attn = src_attn.copy()
                         elif self.config.dynamic_border:
@@ -576,7 +590,7 @@ class AlignAttBackend(SimulMTBackend):
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
                                 head_temp_reference=self.config.head_temp_reference,
-                                top_p_threshold=effective_top_p,
+                                top_p_threshold=step_top_p,
                             )
                         else:
                             border_hit = check_border(
@@ -586,7 +600,7 @@ class AlignAttBackend(SimulMTBackend):
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
                                 head_temp_reference=self.config.head_temp_reference,
-                                top_p_threshold=effective_top_p,
+                                top_p_threshold=step_top_p,
                             )
                         if border_hit:
                             consecutive_border_hits += 1

@@ -826,6 +826,93 @@ def attention_entropy(src_attn: np.ndarray, ts_scores: List[float]) -> float:
     return float(np.dot(ts, entropies) / ts_sum)
 
 
+def merged_attention_entropy(
+    src_attn: np.ndarray,
+    ts_scores: List[float],
+) -> float:
+    """Compute entropy of the TS-weighted MERGED attention distribution.
+
+    Unlike attention_entropy() which averages per-head entropies, this first
+    merges all heads into a single distribution (TS-weighted average) and then
+    computes its entropy. This captures the ensemble's collective uncertainty
+    about source position, which is what the top_p aggregation operates on.
+
+    Low entropy = focused merged attention (model confident about source position)
+    High entropy = spread merged attention (model uncertain)
+
+    Args:
+        src_attn: (n_heads, n_src) attention weights
+        ts_scores: TS score per head
+
+    Returns:
+        Entropy in nats. Range: [0, ln(n_src)]
+    """
+    eps = 1e-10
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < eps:
+        merged = src_attn.mean(axis=0)
+    else:
+        merged = (ts[:, np.newaxis] * src_attn).sum(axis=0) / ts_sum
+
+    total = merged.sum()
+    if total < eps:
+        return 0.0
+    merged = merged / total
+
+    # Shannon entropy in nats (base e)
+    merged = merged[merged > eps]
+    return float(-np.sum(merged * np.log(merged)))
+
+
+def entropy_gated_top_p_threshold(
+    base_threshold: float,
+    attention_entropy: float,
+    low_entropy: float = 1.0,
+    high_entropy: float = 2.5,
+    low_scale: float = 0.88,
+    high_scale: float = 1.08,
+) -> float:
+    """Adjust top_p threshold based on merged attention entropy.
+
+    Novel technique: modulate the top_p frontier sensitivity on a per-token
+    basis using the ensemble attention distribution's entropy.
+
+    Low entropy (focused attention) -> scale DOWN threshold -> tighter frontier
+    -> emit sooner (lower YAAL). The model is confident about source position,
+    so we trust smaller cumulative mass for the border check.
+
+    High entropy (spread attention) -> scale UP threshold -> wider frontier
+    -> wait longer (better quality). The model is uncertain, so we require
+    more cumulative mass before declaring a border hit.
+
+    The scaling is linear between low_entropy and high_entropy, with the
+    identity (scale=1.0) in the middle. This ensures smooth modulation.
+
+    Args:
+        base_threshold: Base top_p threshold (e.g. 0.85)
+        attention_entropy: Entropy of merged attention (nats), from
+            merged_attention_entropy()
+        low_entropy: Below this -> minimum scale (default 1.0 nats)
+        high_entropy: Above this -> maximum scale (default 2.5 nats)
+        low_scale: Scale factor at low entropy (default 0.88, i.e. -12%)
+        high_scale: Scale factor at high entropy (default 1.08, i.e. +8%)
+
+    Returns:
+        Adjusted top_p threshold, clamped to [0.5, 0.99]
+    """
+    if attention_entropy <= low_entropy:
+        scale = low_scale
+    elif attention_entropy >= high_entropy:
+        scale = high_scale
+    else:
+        # Linear interpolation
+        t = (attention_entropy - low_entropy) / (high_entropy - low_entropy)
+        scale = low_scale + t * (high_scale - low_scale)
+
+    return max(0.5, min(0.99, base_threshold * scale))
+
+
 def dynamic_border_distance(
     src_attn: np.ndarray,
     ts_scores: List[float],
