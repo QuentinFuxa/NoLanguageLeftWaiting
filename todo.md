@@ -610,6 +610,49 @@
 - [x] **SOTA research completed**: Hibiki perplexity, ExPosST, Translation Heads ICLR 2026, DuoAttention, competition landscape analyzed
 - [x] 893 unit tests (34 new, all passing)
 
+## DONE -- Iteration 21: OmniSTEval Format Hardening, Source-Aware Batching
+
+- [x] **OmniSTEval format hardened** (CRITICAL for competition):
+  - NFKC normalization for char-level delays (matching `ss-to-log.py` reference converter)
+  - LLM artifact stripping: `<end_of_turn>`, `<|endoftext|>` removed from prediction + event text
+  - Monotonic delay enforcement: `to_omnisteval_entry()` now guarantees non-decreasing delays
+  - These fixes ensure our output matches exactly what the competition evaluation expects
+- [x] **Source-aware word batching** (`source_aware_batching` config, `--source-aware-batch` CLI):
+  - Novel: no published work on function-word-aware batching for SimulMT
+  - Defers translation when the batch ends on a function word (the, of, in, etc.)
+  - `should_defer_batch()`: checks if last word is a function word for the source language
+  - Function word lists: 60+ English words (determiners, prepositions, conjunctions, auxiliaries, pronouns)
+  - 30+ Czech function words for CS-EN direction
+  - Max 2 extra words deferred per batch (prevents unbounded latency)
+  - Case-insensitive matching, graceful handling of unknown languages (defaults to English)
+  - Wired into AlignAtt backend batching logic, `--source-aware-batch` CLI, `srcaware=0,1` sweep
+  - **Needs GPU testing** to measure quality improvement
+- [x] **Comprehensive GPU experiment script** (`scripts/run_iteration21_experiments.py`):
+  - Phase 1: Smoke test -- all 4 directions with optimal configs (20 sentences)
+  - Phase 2: Perplexity adaptive border -- baseline vs ppl-adaptive, threshold sweep
+  - Phase 3: Longform E2E -- gold transcript -> processor -> OmniSTEval JSONL
+  - Phase 4: Multi-direction longform -- all 4 directions in longform mode
+  - Phase 5: Competition format -- 100 sentences, OmniSTEval output per direction
+  - Phase 6: Adaptive top_p decision -- fixed vs adaptive across all directions
+  - Phase 7: Source-aware batching -- fixed vs source-aware across all directions
+  - Usage: `python scripts/run_iteration21_experiments.py --model /path/to/model.gguf`
+  - Quick mode: `--quick` (20 sentences instead of 100)
+  - Single phase: `--phase N` (1-7)
+  - Gold transcript: `--gold-jsonl /path/to/gold.jsonl` (for phase 3)
+- [x] **Char-level auto-detection** for zh/ja/ko targets:
+  - `to_omnisteval_entry()` now auto-detects `char_level` from target language
+  - Chinese/Japanese/Korean -> per-character delays, others -> per-word delays
+  - Prevents invalid OmniSTEval output when `--char-level` flag is forgotten
+  - Explicit `char_level=True/False` still works as override
+- [x] **n_ctx overflow protection** in longform mode:
+  - Safety valve: force backend reset when source words approach 70% of n_ctx
+  - Prevents KV cache overflow if sentence boundary detection fails
+- [x] **Delay count validation** in `to_omnisteval_entry()`:
+  - Validates `len(delays) == len(units)` before returning
+  - Auto-pads/trims with warning if mismatch occurs
+  - Catches format violations early rather than at scoring time
+- [x] 920 unit tests (27 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -708,6 +751,16 @@
 - [ ] **Perplexity + adaptive top_p combined**: `python -m nllw.bench --perplexity-adaptive-bd --adaptive-top-p --lang en-zh --comet --save`
 - [ ] **Perplexity per direction**: `python -m nllw.bench --perplexity-adaptive-bd --lang en-zh,en-de,en-it,cs-en --comet --save`
 
+### Source-aware batching experiments (new in iteration 21)
+- [ ] **Source-aware batching test**: `python -m nllw.bench --source-aware-batch --lang en-zh --comet --save` vs baseline
+- [ ] **Source-aware per direction**: `python -m nllw.bench --source-aware-batch --lang en-zh,en-de,en-it,cs-en --comet --save`
+- [ ] **Source-aware + adaptive top_p combined**: `python -m nllw.bench --source-aware-batch --adaptive-top-p --lang en-zh --comet --save`
+- [ ] **Source-aware + perplexity combined**: `python -m nllw.bench --source-aware-batch --perplexity-adaptive-bd --lang en-zh --comet --save`
+
+### Iteration 21 full experiment suite
+- [ ] **Run full experiment script on A40**: `python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf`
+- [ ] **Run with real gold transcript**: `python scripts/run_iteration21_experiments.py --model /home/fuxa/HY-MT1.5-7B.Q8_0.gguf --phase 3 --gold-jsonl /path/to/gold.jsonl`
+
 ### Calibration experiments (new in iteration 13)
 - [ ] **Collect fusion traces on A40**: `python -m nllw.bench --signal-fusion --shift-k 0.4 --coverage-threshold 0.3 --lang en-zh --comet --save --collect-traces traces_enzh.json`
 - [ ] **Collect traces per direction**: Run with `--collect-traces` for en-zh, en-de, en-it, cs-en
@@ -778,6 +831,13 @@
 - [ ] **IWSLT 2026 baselines available**: [github.com/owaski/iwslt-2026-baselines](https://github.com/owaski/iwslt-2026-baselines) -- Qwen3-ASR-1.7B + Qwen3-4B-Instruct-2507. We should significantly outperform.
 - [ ] **CMU IWSLT 2025 system** (arxiv 2506.13143): Qwen2.5-7B with specialized KV cache management. Relevant for our Qwen3.5 support.
 - [ ] **Conversational SimulMT** (arxiv 2402.10552, IWSLT 2025): Frames SimulMT as multi-turn conversation for full KV cache reuse. Could restructure our prompts to maximize cache hit rate.
+
+### NEW Iteration 21 Research Agent Findings (March 2026)
+- [ ] **Attribution-Guided Decoding** (arxiv 2509.26307, ICLR 2026): Select output tokens maximizing attribution to committed source words. Training-free, works with frozen models. Novel quality signal for border detection.
+- [x] **CUNI won IWSLT 2025 with same architecture** (arxiv 2506.17077): AlignAtt + LocalAgreement + forced decoding + Whisper. Our system directly extends theirs with top_p, perplexity adaptive bd, source-aware batching. Validates our approach.
+- [x] **Translation Heads validated** (ICLR 2026 q8fTgw8e5E): Our TS-scoring head detection independently validated. Sparse, cross-lingually consistent, causal.
+- [ ] **Hikari WAIT token** (arxiv 2603.11578, March 2026): Decoder Time Dilation reduces overhead during wait periods. Could inspire efficiency improvements.
+- [x] **IWSLT 2026 eval confirmed**: April 1-15, system paper April 24, conference July 3-4 at ACL 2026 San Diego. COMET wmt22-comet-da primary metric. Single H100 80GB.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025) -- needs LoRA fine-tuning. Position mismatch validated as negligible. See analysis.

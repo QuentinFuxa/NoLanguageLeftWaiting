@@ -147,7 +147,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~14,800 lines across 30 SimulMT modules, 893 tests
+### What exists now: ~14,900 lines across 30 SimulMT modules, 920 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -251,6 +251,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `perplexity_adaptive_bd` | False | Hibiki-inspired: adjust bd from generation confidence. Low ppl=tighten, high ppl=widen |
 | `perplexity_bd_low` | 2.0 | Below this ppl -> bd-1 (confident, lower latency) |
 | `perplexity_bd_high` | 5.0 | Above this ppl -> bd+1 (uncertain, safer) |
+| `source_aware_batching` | False | Defer translate() when batch ends on function word (the, of, in...). Novel |
 | `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
 | `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |
