@@ -103,6 +103,14 @@ def _find_heads_for_model(model_path: str, direction: str) -> Optional[str]:
             if fname.endswith(".json") and pattern in fname.lower():
                 return os.path.join(configs_dir, fname)
 
+    # Cross-lingual head transfer fallback: use any direction for same model
+    # Validated: EuroLLM/HY-MT/Qwen3.5 heads transfer >97% TS mass across directions
+    if patterns:
+        model_prefix = patterns[0].rsplit("_", 2)[0]  # e.g. "hymt" from "hymt_en_zh"
+        for fname in os.listdir(configs_dir):
+            if fname.endswith(".json") and model_prefix in fname.lower():
+                return os.path.join(configs_dir, fname)
+
     return None
 
 
@@ -630,6 +638,7 @@ class AlignAttBackend(SimulMTBackend):
             n_ctx=self.config.n_ctx,
             n_batch=self.config.n_ctx,
             attn_weights=True,
+            n_gpu_layers=self.config.n_gpu_layers,
         )
         ll.set_attn_heads(self._ctx, self._head_layers, self._head_indices)
         self._mem = ll.get_memory(self._ctx)

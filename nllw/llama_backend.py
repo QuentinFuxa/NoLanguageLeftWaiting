@@ -319,10 +319,16 @@ def free_model(model):
     _lib.llama_model_free(model)
 
 
-def create_context(model, n_ctx: int = 2048, n_batch: int = 2048, attn_weights: bool = True):
-    """Create a llama_context with optional attention weight extraction."""
+def create_context(model, n_ctx: int = 2048, n_batch: int = 2048,
+                    attn_weights: bool = True, n_gpu_layers: int = 0):
+    """Create a llama_context with optional attention weight extraction.
+
+    Args:
+        n_gpu_layers: When > 0, offloads KV cache to GPU (offload_kqv=true).
+    """
     shim = _compile_shim()
-    ctx = shim.create_ctx_with_attn(model, n_ctx, n_batch, 1 if attn_weights else 0, 0)
+    ctx = shim.create_ctx_with_attn(model, n_ctx, n_batch,
+                                     1 if attn_weights else 0, n_gpu_layers)
     if not ctx:
         raise RuntimeError("Failed to create llama_context")
     return ctx

@@ -1121,6 +1121,7 @@ class AlignAttLABackend(SimulMTBackend):
             n_ctx=self.config.n_ctx,
             n_batch=self.config.n_ctx,
             attn_weights=True,
+            n_gpu_layers=self.config.n_gpu_layers,
         )
         ll.set_attn_heads(self._ctx, self._head_layers, self._head_indices)
         self._mem = ll.get_memory(self._ctx)

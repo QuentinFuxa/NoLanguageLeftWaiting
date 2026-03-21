@@ -73,6 +73,7 @@ def simulate_backend(backend, source_text: str, is_final_on_last: bool = True) -
     words = source_text.strip().split()
     trace = SimulationTrace(source_words=words)
     target_word_count = 0
+    collected_texts = []
 
     for i, word in enumerate(words):
         is_last = (i == len(words) - 1)
@@ -89,6 +90,7 @@ def simulate_backend(backend, source_text: str, is_final_on_last: bool = True) -
         })
 
         if result.text:
+            collected_texts.append(result.text)
             # Count new target words
             new_target_words = result.text.strip().split()
             for tw in new_target_words:
@@ -103,7 +105,11 @@ def simulate_backend(backend, source_text: str, is_final_on_last: bool = True) -
                 "stopped_at_border": result.stopped_at_border,
             })
 
-    trace.translation = backend.get_full_translation()
+    # Prefer get_full_translation() for proper token-level decoding,
+    # but fall back to collected step texts if the backend cleared state
+    # (e.g. _handle_segment_end resets committed_ids on is_final)
+    full = backend.get_full_translation()
+    trace.translation = full if full else "".join(collected_texts)
     trace.compute_metrics()
     return trace
 
