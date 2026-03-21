@@ -159,6 +159,8 @@ class BackendConfig:
     wait_k: int = 5
     # Target language (for output validation)
     target_lang: str = "zh"
+    # GPU offloading: number of layers to offload. 0=CPU, 99=all layers.
+    n_gpu_layers: int = 0
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "BackendConfig":
@@ -240,6 +242,22 @@ def register_backend(name: str):
     return decorator
 
 
+def _ensure_backends_imported():
+    """Import backend modules so their @register_backend decorators fire."""
+    if _BACKEND_REGISTRY:
+        return  # already populated
+    import importlib
+    for mod_name in [
+        "nllw.alignatt_backend",
+        "nllw.alignatt_la_backend",
+        "nllw.baselines",
+    ]:
+        try:
+            importlib.import_module(mod_name)
+        except Exception:
+            pass
+
+
 def create_backend(config: BackendConfig) -> SimulMTBackend:
     """Create a backend from config.
 
@@ -250,6 +268,7 @@ def create_backend(config: BackendConfig) -> SimulMTBackend:
         - "full-sentence": Full sentence baseline (quality upper bound)
         - "eager": Eager baseline (latency lower bound)
     """
+    _ensure_backends_imported()
     backend_type = config.backend_type
     if backend_type not in _BACKEND_REGISTRY:
         available = ", ".join(sorted(_BACKEND_REGISTRY.keys()))
