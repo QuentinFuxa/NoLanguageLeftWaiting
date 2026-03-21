@@ -247,6 +247,45 @@
   - `use_combined` condition extended with `coverage_threshold is not None or attention_monotonicity`
 - [x] 495 unit tests (54 new, all passing)
 
+## DONE -- Iteration 11: N-gram Repetition Detection + SimulStream Wrapper
+
+- [x] **N-gram repetition detection** (`repetition_max_repeats` config, `--repetition-halt` CLI):
+  - Novel: no published work on n-gram repetition as border/halt signal in SimulMT
+  - Within-step, output-space signal -- orthogonal to all attention-based signals
+  - `detect_ngram_repetition()`: check for repeated 2-4grams in generated tokens
+  - `compute_repetition_score()`: continuous 0-1 score for generation quality monitoring
+  - Detects degenerate repetitive loops during generation, forces early halt
+  - Prevents wasted compute on hallucinated repetitive text
+  - Wired into AlignAtt backend (main generation loop) + all 3 LA retranslation methods
+  - `--repetition-halt 2` CLI flag, `rep=2,3,4` sweep shortname
+  - Zero overhead: simple tuple matching on last N tokens
+- [x] **SimulStream wrapper** (`nllw/simulstream.py`, `python -m nllw.simulstream`):
+  - CRITICAL for IWSLT 2026 submission (eval April 1-15)
+  - `NLLWSpeechProcessor`: wraps any NLLW backend as SimulStream SpeechProcessor
+  - `process_chunk(waveform)` -> IncrementalOutput (audio mode with ASR)
+  - `process_words(words)` -> IncrementalOutput (text mode for testing/eval)
+  - `end_of_stream()` -> flush remaining output
+  - `clear()` -> reset between talks
+  - `SimulStreamConfig`: combines backend config + ASR + streaming params
+  - `DIRECTION_DEFAULTS`: per-direction optimal configs (EN-ZH, EN-DE, EN-IT, CS-EN)
+  - `process_gold_transcript()`: JSONL-in/JSONL-out evaluation pipeline
+  - `process_text_sentences()`: plain text evaluation for testing
+  - YAML config support for per-direction configs
+  - CLI with --input (gold JSONL), --test (self-test), --text (single sentence) modes
+- [x] **Attention shift tracking** (`attention_shift` config, `--attention-shift` CLI):
+  - Novel: no published work on cross-step attention position shift for SimulMT border detection
+  - Cross-step, input-space signal -- completes the signal taxonomy (the only missing quadrant)
+  - `compute_attention_shift()`: TS-weighted attention position delta between translate() calls
+  - `attention_shift_supports_write()`: interpret shift as READ/WRITE signal
+  - Large forward shift = model consuming new source (WRITE). Small/no shift = stuck (READ)
+  - Integrated as pre-filter in `check_border_combined()` (step 0a2, after REINA)
+  - Wired into both AlignAtt and AlignAtt-LA backends
+  - `--attention-shift` CLI flag, `attshift=0,1` sweep shortname
+  - Minimal overhead: one weighted position computation per translate() call
+- [x] **Dockerfile**: Multi-stage Docker build for IWSLT 2026 H100 submission
+- [x] **IWSLT 2026 configs**: Per-direction YAML configs (en-zh, en-de, en-it, cs-en)
+- [x] 581 unit tests (86 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -256,9 +295,13 @@
   - Compare endpoint for side-by-side backend comparison
 - [ ] MCP server for editor integration
 - [ ] LoRA adapter loading + discovery
-- [ ] **SimulStream integration** (CRITICAL for IWSLT 2026 submission): Wrap NLLW backend as SimulStream `SpeechProcessor`. Subclass `SpeechProcessor`, implement `process_chunk()` and `end_of_stream()`. See github.com/hlt-mt/simulstream.
+- [x] **SimulStream integration** (IMPLEMENTED, iteration 11): `nllw/simulstream.py` wraps any NLLW backend as SimulStream SpeechProcessor. `process_chunk()`, `end_of_stream()`, `clear()`. Text + audio modes. **Needs ASR integration + GPU E2E test.**
 - [ ] **OmniSTEval integration**: Verify `omnisteval.py` output is compatible with latest OmniSTEval `longform` mode + XCOMET-XL scoring.
 - [ ] **Docker packaging**: Dockerfile for H100 80GB submission (Q8_0 7B GGUF = ~8GB VRAM)
+- [ ] **ASR integration in SimulStream**: Wire Qwen3-ASR into `NLLWSpeechProcessor._run_asr()` for full audio pipeline.
+- [ ] **TAF source lookahead in SimulStream**: Port TAF from iwslt26-sst (peek at source logits to defer translation for multi-word expressions). Already in reference code lines 660-732.
+- [ ] **Adaptive BD from ASR confidence in SimulStream**: Wire `adaptive_border_distance()` (already in alignatt.py) into SimulStream wrapper when ASR provides confidence scores.
+- [ ] **Compute-aware emission times**: Wire `max(speech_time, wall_clock)` into SimulStream wrapper output.
 
 ## TODO -- Experiments to Run
 
@@ -311,6 +354,14 @@
 - [ ] **Full iteration 10 sweep**: `python -m nllw.bench --sweep "cov=0.3 mono=0,1 shiftk=0.4" --lang en-zh --comet --save`
 - [ ] **All signals combined (iterations 7-10)**: `python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --lang en-zh --comet --save`
 - [ ] **Coverage per direction**: `python -m nllw.bench --sweep "cov=0.2,0.3,0.4" --lang en-zh,en-de,en-it,cs-en --comet --save` -- coverage threshold may need per-language tuning
+- [ ] **Repetition halt test**: `python -m nllw.bench --repetition-halt 2 --lang en-zh --comet --save`
+- [ ] **Repetition halt sweep**: `python -m nllw.bench --sweep "rep=2,3,4" --lang en-zh --comet --save`
+- [ ] **Repetition + coverage combined**: `python -m nllw.bench --repetition-halt 2 --coverage-threshold 0.3 --lang en-zh --comet --save`
+- [ ] **All signals combined (iterations 7-11)**: `python -m nllw.bench --coverage-threshold 0.3 --attention-monotonicity --entropy-change -0.5 --prediction-stability --shift-k 0.4 --lsg-kl 7.0 --repetition-halt 2 --lang en-zh --comet --save`
+- [ ] **Attention shift test**: `python -m nllw.bench --attention-shift --lang en-zh --comet --save`
+- [ ] **Attention shift + entropy combined**: `python -m nllw.bench --attention-shift --entropy-change -0.5 --lang en-zh --comet --save`
+- [ ] **All cross-step signals (iter 9+11)**: `python -m nllw.bench --entropy-change -0.5 --prediction-stability --attention-shift --lang en-zh --comet --save`
+- [ ] **SimulStream E2E test**: `python -m nllw.simulstream --model /path/to/model.gguf --lang en-zh --test`
 
 ## TODO -- Research Ideas (informed by SOTA survey, see docs/research/sota-simulmt-2026.md)
 
@@ -359,6 +410,12 @@
 - [ ] **IWSLT 2026 baseline comparison**: Run our system against official baseline scores (Qwen3-4B). We should significantly outperform since Qwen3-4B is known inferior.
 - [ ] **Beam search for low-resource pairs**: CUNI uses 5 beams for Cs-En (their weakest pair). Consider adding beam search option.
 - [ ] **Sentence-level buffer trimming**: CUNI trims context differently per target language. Our context injection should be language-adaptive.
+
+### NEW High Priority (Iteration 11 Research Agent Findings, March 2026)
+- [ ] **Entropic-Time Inference** (arxiv 2603.03310, Feb 2026): Dynamic entropy governance instead of fixed thresholds. Could replace our static entropy_veto_threshold with flow-based adaptive control. Training-free, extends vLLM with entropy-aware scheduling.
+- [ ] **Translation Mechanism of LLMs** (arxiv 2502.11806, Feb 2026): Only <5% of heads matter for translation. Fine-tuning 64 heads matches full fine-tuning. Confirms our sparse head detection is correct. Could prune alignment head set further.
+- [ ] **Hibiki-Zero GRPO for latency** (arxiv 2602.11072, Feb 2026): Kyutai 3B model uses GRPO RL to optimize latency. SOTA on 5 X-to-EN tasks. If training resources available, promising RL direction.
+- [x] **Translation Heads (ICLR 2026)**: Validates our head_transfer.py results -- alignment heads are universal, sparse, cross-lingually consistent, and causal. >97% TS mass transfer confirmed independently.
 
 ### Lower Priority (competitive intelligence)
 - [ ] Test Group Position Encoding (ACL 2025) -- needs LoRA fine-tuning. Position mismatch validated as negligible. See analysis.

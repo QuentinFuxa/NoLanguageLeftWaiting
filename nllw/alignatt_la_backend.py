@@ -39,14 +39,17 @@ from . import llama_backend as ll
 from .alignatt import (
     aggregate,
     aggregate_ts_weighted_vote,
+    attention_shift_supports_write,
     check_border,
     check_border_combined,
     check_border_dynamic,
+    compute_attention_shift,
     compute_dynamic_word_batch,
     compute_entropy,
     compute_entropy_change,
     compute_logit_kl,
     compute_prediction_stability,
+    detect_ngram_repetition,
     is_target_language,
     load_head_config,
     prediction_stability_supports_write,
@@ -286,6 +289,9 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_first_token_logits: Optional[np.ndarray] = None
         self._current_entropy_change: Optional[float] = None
         self._current_pred_stability_write: Optional[bool] = None
+        # Cross-step attention shift tracking
+        self._prev_translate_attn: Optional[np.ndarray] = None
+        self._current_attn_shift_write: Optional[bool] = None
         # Attention position history for monotonicity tracking
         self._gen_positions_history: List[float] = []
 
@@ -369,7 +375,7 @@ class AlignAttLABackend(SimulMTBackend):
             )
 
     def _check_border(self, src_attn: np.ndarray, num_src_tokens: int) -> bool:
-        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability, coverage, monotonicity)."""
+        """Check border with all configured enhancements (AMS, temp norm, dynamic, shift-k, info gain, REINA, stability, coverage, monotonicity, attention shift)."""
         bd = getattr(self, '_effective_bd', self.config.border_distance)
         # Use combined check if any multi-signal feature enabled
         use_combined = (
@@ -379,6 +385,7 @@ class AlignAttLABackend(SimulMTBackend):
             or self.config.prediction_stability
             or self.config.coverage_threshold is not None
             or self.config.attention_monotonicity
+            or self.config.attention_shift
         )
         if use_combined:
             # Track attended position for monotonicity
@@ -406,6 +413,7 @@ class AlignAttLABackend(SimulMTBackend):
                 coverage_threshold=self.config.coverage_threshold,
                 positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
                 monotonicity_enabled=self.config.attention_monotonicity,
+                attn_shift_write=getattr(self, '_current_attn_shift_write', None) if self.config.attention_shift else None,
             )
             self._prev_step_attn = src_attn.copy()
             return hit
@@ -464,7 +472,7 @@ class AlignAttLABackend(SimulMTBackend):
             ll.memory_seq_rm(self._mem, 1, 0, -1)
 
     def _update_cross_step_signals(self):
-        """Update REINA entropy change and prediction stability signals.
+        """Update REINA entropy change, prediction stability, and attention shift.
 
         Called once per translate() before the generation loop. Compares
         the model's first-token logits with those from the previous call
@@ -472,28 +480,48 @@ class AlignAttLABackend(SimulMTBackend):
         """
         use_entropy_change = self.config.entropy_change_threshold is not None
         use_pred_stability = self.config.prediction_stability
-        if not (use_entropy_change or use_pred_stability):
-            return
+        use_attn_shift = self.config.attention_shift
 
-        first_logits = ll.get_logits_array(self._ctx, -1, self._nv)
-        if first_logits is None:
-            return
+        if use_entropy_change or use_pred_stability:
+            first_logits = ll.get_logits_array(self._ctx, -1, self._nv)
+            if first_logits is not None:
+                if use_entropy_change:
+                    delta_h, cur_h = compute_entropy_change(
+                        first_logits, self._prev_first_token_entropy
+                    )
+                    self._current_entropy_change = delta_h
+                    self._prev_first_token_entropy = cur_h
 
-        if use_entropy_change:
-            delta_h, cur_h = compute_entropy_change(
-                first_logits, self._prev_first_token_entropy
-            )
-            self._current_entropy_change = delta_h
-            self._prev_first_token_entropy = cur_h
+                if use_pred_stability:
+                    top1_rank, topk_ovl = compute_prediction_stability(
+                        first_logits, self._prev_first_token_logits
+                    )
+                    self._current_pred_stability_write = (
+                        prediction_stability_supports_write(top1_rank, topk_ovl)
+                    )
+                    self._prev_first_token_logits = first_logits.copy()
 
-        if use_pred_stability:
-            top1_rank, topk_ovl = compute_prediction_stability(
-                first_logits, self._prev_first_token_logits
-            )
-            self._current_pred_stability_write = (
-                prediction_stability_supports_write(top1_rank, topk_ovl)
-            )
-            self._prev_first_token_logits = first_logits.copy()
+        # Attention shift: extract attention at current position
+        if use_attn_shift:
+            ctx_size = ll.n_ctx(self._ctx)
+            attn = ll.get_attn_weights(self._ctx, 0, self._n_heads, ctx_size)
+            if attn is not None:
+                prefix_len = len(self._prefix_tokens)
+                source_tokens = ll.tokenize(
+                    self._vocab, " ".join(self._source_words),
+                    add_bos=False, special=False,
+                )
+                src_end = prefix_len + len(source_tokens)
+                if src_end <= attn.shape[1]:
+                    cur_src_attn = attn[:, prefix_len:src_end]
+                    shift_val = compute_attention_shift(
+                        cur_src_attn, self._prev_translate_attn,
+                        self._ts_scores,
+                    )
+                    self._current_attn_shift_write = (
+                        attention_shift_supports_write(shift_val)
+                    )
+                    self._prev_translate_attn = cur_src_attn.copy()
 
     def _retranslate(self, is_final: bool) -> List[int]:
         """Re-translate the full source using AlignAtt.
@@ -567,6 +595,15 @@ class AlignAttLABackend(SimulMTBackend):
             next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
             if next_tok in self._stop_ids or next_tok < 0:
                 break
+
+            # N-gram repetition detection: halt on degenerate loops
+            if (self.config.repetition_max_repeats is not None
+                    and len(gen_ids) >= 4):
+                if detect_ngram_repetition(
+                    gen_ids + [next_tok],
+                    max_repeats=self.config.repetition_max_repeats,
+                ):
+                    break
 
             # Entropy veto
             if self.config.entropy_veto_threshold is not None:
@@ -666,6 +703,15 @@ class AlignAttLABackend(SimulMTBackend):
             next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
             if next_tok in self._stop_ids or next_tok < 0:
                 break
+
+            # N-gram repetition detection
+            if (self.config.repetition_max_repeats is not None
+                    and len(gen_ids) >= 4):
+                if detect_ngram_repetition(
+                    gen_ids + [next_tok],
+                    max_repeats=self.config.repetition_max_repeats,
+                ):
+                    break
 
             # Entropy veto
             if self.config.entropy_veto_threshold is not None:
@@ -826,6 +872,15 @@ class AlignAttLABackend(SimulMTBackend):
             next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
             if next_tok in self._stop_ids or next_tok < 0:
                 break
+
+            # N-gram repetition detection
+            if (self.config.repetition_max_repeats is not None
+                    and len(gen_ids) >= 4):
+                if detect_ngram_repetition(
+                    gen_ids + [next_tok],
+                    max_repeats=self.config.repetition_max_repeats,
+                ):
+                    break
 
             # Entropy veto
             if self.config.entropy_veto_threshold is not None:
@@ -1051,6 +1106,8 @@ class AlignAttLABackend(SimulMTBackend):
         self._prev_first_token_logits = None
         self._current_entropy_change = None
         self._current_pred_stability_write = None
+        self._prev_translate_attn = None
+        self._current_attn_shift_write = None
         self._gen_positions_history = []
 
         if self._ctx is not None:

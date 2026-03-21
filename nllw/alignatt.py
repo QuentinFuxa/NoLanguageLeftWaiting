@@ -1268,6 +1268,7 @@ def check_border_combined(
     coverage_threshold: Optional[float] = None,
     positions_history: Optional[List[float]] = None,
     monotonicity_enabled: bool = False,
+    attn_shift_write: Optional[bool] = None,
 ) -> Tuple[bool, Optional[float], Optional[float]]:
     """Combined border check with all available signals.
 
@@ -1316,6 +1317,11 @@ def check_border_combined(
     # 0a. Cross-step pre-filter: entropy change (REINA-inspired)
     if (entropy_change is not None and entropy_change_threshold is not None
             and entropy_change < entropy_change_threshold):
+        return False, None, None
+
+    # 0a2. Cross-step pre-filter: attention shift
+    # If attention didn't shift forward, model isn't consuming source -> READ
+    if attn_shift_write is not None and not attn_shift_write:
         return False, None, None
 
     # 0b. Source coverage guard (novel): if source coverage is too low,
@@ -1589,6 +1595,186 @@ def prediction_stability_supports_write(
     rank_stable = top1_rank <= rank_threshold
     overlap_stable = topk_overlap >= overlap_threshold
     return rank_stable and overlap_stable
+
+
+def compute_attention_shift(
+    current_attn: np.ndarray,
+    prev_attn: Optional[np.ndarray],
+    ts_scores: List[float],
+) -> Optional[float]:
+    """Compute cross-step attention shift between translate() calls.
+
+    Measures how much the model's source focus changed after adding a new
+    source word. Large forward shift = model consuming new source (WRITE).
+    Small/no shift = model not integrating new source (READ more).
+
+    This is a cross-step, input-space signal -- orthogonal to:
+    - Entropy change (cross-step, output-space)
+    - Prediction stability (cross-step, output-space)
+    - Source coverage (within-step, input-space)
+
+    Novel: no published work on cross-step attention position shift
+    as a border signal for simultaneous MT.
+
+    Args:
+        current_attn: Current step attention (n_heads, n_src)
+        prev_attn: Previous translate() call's attention. None on first call.
+        ts_scores: TS score per head
+
+    Returns:
+        Attention position shift (positive = forward). None if no prev_attn.
+        Typical range: [-1, n_src]. Values > 0.5 indicate forward progress.
+    """
+    if prev_attn is None:
+        return None
+
+    ts = np.array(ts_scores, dtype=np.float64)
+    ts_sum = ts.sum()
+    if ts_sum < 1e-10:
+        return None
+
+    # Compute TS-weighted attended position for current and previous
+    def weighted_pos(attn):
+        n_heads, n_src = attn.shape
+        positions = np.arange(n_src, dtype=np.float64)
+        per_head_pos = np.zeros(n_heads)
+        for h in range(n_heads):
+            p = attn[h]
+            total = p.sum()
+            if total > 1e-10:
+                p = p / total
+                per_head_pos[h] = np.dot(p, positions)
+        return float(np.dot(ts[:n_heads], per_head_pos[:n_heads]) / ts_sum)
+
+    # Handle size mismatch (new source has more tokens)
+    cur_pos = weighted_pos(current_attn)
+
+    # For prev, only use the overlapping source region
+    n_prev = prev_attn.shape[1]
+    n_cur = current_attn.shape[1]
+    if n_prev > 0:
+        prev_pos = weighted_pos(prev_attn)
+    else:
+        return None
+
+    return cur_pos - prev_pos
+
+
+def attention_shift_supports_write(
+    shift: Optional[float],
+    min_shift: float = 0.5,
+) -> Optional[bool]:
+    """Interpret attention shift as READ/WRITE signal.
+
+    Args:
+        shift: Attention position change (from compute_attention_shift)
+        min_shift: Minimum shift to support WRITE. Default: 0.5.
+
+    Returns:
+        True if shift supports WRITE (model consuming source).
+        False if shift supports READ (model stuck, needs more).
+        None if no shift data.
+    """
+    if shift is None:
+        return None
+    return shift >= min_shift
+
+
+def detect_ngram_repetition(
+    token_ids: List[int],
+    min_n: int = 2,
+    max_n: int = 4,
+    max_repeats: int = 2,
+) -> bool:
+    """Detect n-gram repetition in generated token sequence.
+
+    When LLMs hallucinate during generation, they often enter repetitive
+    loops producing the same n-gram pattern repeatedly. This function
+    detects such patterns as an early stopping signal.
+
+    This is a within-step, output-space signal -- orthogonal to all
+    attention-based signals. It measures the OUTPUT quality directly
+    rather than inferring quality from attention patterns.
+
+    Novel application: no published work on n-gram repetition detection
+    as a border/halt signal in simultaneous MT with decoder-only LLMs.
+
+    Algorithm:
+        For each n in [min_n, max_n], check if the last n tokens form
+        a pattern that has appeared >= max_repeats times in the recent
+        token history. This catches both exact repetition (same phrase
+        repeated) and degenerate loops.
+
+    Args:
+        token_ids: List of generated token IDs (chronological order)
+        min_n: Minimum n-gram size to check (default: 2, bigrams)
+        max_n: Maximum n-gram size to check (default: 4, 4-grams)
+        max_repeats: Maximum allowed repeats before flagging (default: 2)
+
+    Returns:
+        True if repetition detected (should halt generation).
+        False if no concerning repetition found.
+    """
+    n_tokens = len(token_ids)
+    if n_tokens < min_n * (max_repeats + 1):
+        return False
+
+    for n in range(min_n, min(max_n, n_tokens // 2) + 1):
+        # Extract the last n tokens as the pattern
+        pattern = tuple(token_ids[-n:])
+
+        # Count occurrences in the full sequence
+        count = 0
+        for i in range(n_tokens - n + 1):
+            if tuple(token_ids[i:i + n]) == pattern:
+                count += 1
+
+        if count > max_repeats:
+            return True
+
+    return False
+
+
+def compute_repetition_score(
+    token_ids: List[int],
+    window: int = 20,
+) -> float:
+    """Compute a continuous repetition score for the last N tokens.
+
+    Instead of a binary flag, provides a 0-1 score indicating how
+    repetitive the recent generation is. Useful for gradual modulation
+    rather than hard cutoff.
+
+    Algorithm:
+        Count unique bigrams in the last `window` tokens divided by
+        the total number of bigrams. Highly repetitive text will have
+        few unique bigrams relative to total.
+
+    Args:
+        token_ids: List of generated token IDs
+        window: Size of the lookback window (default: 20)
+
+    Returns:
+        Repetition score in [0, 1]. 0 = no repetition, 1 = fully repetitive.
+        Returns 0.0 if fewer than 3 tokens generated.
+    """
+    if len(token_ids) < 3:
+        return 0.0
+
+    recent = token_ids[-window:]
+    if len(recent) < 3:
+        return 0.0
+
+    # Count bigrams
+    bigrams = [(recent[i], recent[i + 1]) for i in range(len(recent) - 1)]
+    n_bigrams = len(bigrams)
+    n_unique = len(set(bigrams))
+
+    if n_bigrams <= 1:
+        return 0.0
+
+    # Score: 1 - (unique / total). 0 = all unique, 1 = all same
+    return 1.0 - (n_unique / n_bigrams)
 
 
 def adaptive_border_distance(

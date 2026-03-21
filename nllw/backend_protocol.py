@@ -136,6 +136,17 @@ class BackendConfig:
     # translation -> tighter border. Non-monotonic = reordering -> wider border.
     # False=disabled, True=enabled.
     attention_monotonicity: bool = False
+    # N-gram repetition detection (novel): detect degenerate repetitive loops
+    # during generation and force halt. When LLMs hallucinate, they often enter
+    # repetitive patterns. This catches them early, preventing wasted compute
+    # and garbage output. Orthogonal to attention-based signals (output-space).
+    # None=disabled, 2=recommended (halt after 2 repeats of any 2-4gram).
+    repetition_max_repeats: Optional[int] = None
+    # Attention shift tracking (novel): cross-step, input-space signal.
+    # Measures how much the model's source focus moved after adding a new
+    # source word. Large shift = consuming source (WRITE). Small = stuck (READ).
+    # False=disabled, True=enabled.
+    attention_shift: bool = False
     # Wait-k policy
     wait_k: int = 5
     # Target language (for output validation)
