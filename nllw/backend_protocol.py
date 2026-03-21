@@ -225,6 +225,30 @@ class BackendConfig:
     wait_k: int = 5
     # Target language (for output validation)
     target_lang: str = "zh"
+    # Generation temperature: controls randomness in token selection.
+    # 0.0 = pure greedy (argmax, default). Values 0.1-0.3 add slight
+    # stochasticity that can help escape suboptimal greedy paths.
+    # Research shows low-temperature sampling can improve MT quality
+    # by exploring alternative translations the greedy path misses.
+    # Novel for AlignAtt SimulMT: no published work on temperature
+    # effects in attention-based simultaneous translation.
+    # 0.0=greedy (default), 0.1-0.3=recommended for quality exploration.
+    generation_temperature: float = 0.0
+    # Entropy-based dynamic temperature (EDT, arxiv 2403.14541):
+    # Instead of fixed temperature, dynamically adjust per token.
+    # Confident tokens (low entropy) -> low temperature (near-greedy).
+    # Uncertain tokens (high entropy) -> higher temperature (explore).
+    # More principled than fixed temperature. Overrides generation_temperature.
+    # False=disabled (use fixed temperature), True=use EDT.
+    entropy_dynamic_temperature: bool = False
+    # Confidence-gated token trimming (novel): after generation stops
+    # (border hit or max tokens), trim trailing tokens that have
+    # per-token logprob below a threshold. Prevents committing
+    # low-confidence trailing tokens that may be hallucinated.
+    # Especially important for XCOMET-XL which penalizes semantic errors.
+    # None=disabled (commit all generated tokens).
+    # -3.0=recommended (trim tokens with logprob < -3.0).
+    confidence_trim_threshold: Optional[float] = None
     # GPU offloading: number of layers to offload. 0=CPU, 99=all layers.
     n_gpu_layers: int = 0
 

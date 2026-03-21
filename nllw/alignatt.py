@@ -913,6 +913,158 @@ def entropy_gated_top_p_threshold(
     return max(0.5, min(0.99, base_threshold * scale))
 
 
+def sample_with_temperature(
+    logits: np.ndarray,
+    temperature: float = 0.1,
+) -> int:
+    """Sample a token from logits using temperature-scaled softmax.
+
+    Low temperature (0.01-0.3) stays close to greedy while allowing
+    minor exploration of alternative translations. This can help
+    escape suboptimal greedy paths, especially for low-resource or
+    morphologically rich target languages.
+
+    Novel for AlignAtt SimulMT: no published work on temperature
+    effects in attention-based simultaneous translation.
+
+    Args:
+        logits: Raw logits array of shape (vocab_size,)
+        temperature: Temperature parameter. 0.0 falls back to argmax.
+            0.1 = near-greedy. 0.3 = mild exploration. 1.0 = standard.
+
+    Returns:
+        Sampled token ID
+    """
+    if temperature <= 0.0:
+        return int(np.argmax(logits))
+    # Numerical stability: subtract max before exp
+    scaled = logits / temperature
+    scaled -= np.max(scaled)
+    probs = np.exp(scaled)
+    probs /= probs.sum()
+    return int(np.random.choice(len(probs), p=probs))
+
+
+def trim_low_confidence_tokens(
+    token_ids: List[int],
+    token_logprobs: List[float],
+    threshold: float = -3.0,
+    min_keep: int = 1,
+) -> List[int]:
+    """Trim trailing tokens that fall below a confidence threshold.
+
+    Novel technique for SimulMT: after generation stops (border hit
+    or max tokens), check per-token log-probabilities from the end.
+    Remove trailing tokens with logprob below the threshold.
+
+    Motivation: when AlignAtt's border detection fires, the last
+    few generated tokens may have been produced with low confidence
+    (the model was already "running out of source context"). These
+    trailing tokens are often hallucinated or poorly formed, and
+    hurt XCOMET-XL more than they help (XCOMET-XL penalizes
+    semantic errors 39x more than COMET wmt22-comet-da).
+
+    By trimming these, the next translate() call will regenerate
+    them with more source context available, producing better tokens.
+
+    Args:
+        token_ids: Generated token IDs from the generation loop
+        token_logprobs: Per-token log-probabilities (same length)
+        threshold: Minimum acceptable logprob. Tokens below this
+            are trimmed from the tail. Default -3.0 (exp(-3) = 5%).
+        min_keep: Always keep at least this many tokens (default 1).
+            Prevents trimming everything.
+
+    Returns:
+        Trimmed list of token IDs (may be shorter than input).
+    """
+    if not token_ids or not token_logprobs:
+        return token_ids
+    if len(token_logprobs) != len(token_ids):
+        return token_ids  # Mismatch, don't trim
+
+    # Scan from the end and find the last "confident" token
+    keep = len(token_ids)
+    for i in range(len(token_ids) - 1, -1, -1):
+        if token_logprobs[i] >= threshold:
+            keep = i + 1
+            break
+    else:
+        # All tokens below threshold -- keep min_keep
+        keep = min_keep
+
+    return token_ids[:max(min_keep, keep)]
+
+
+def entropy_based_dynamic_temperature(
+    logits: np.ndarray,
+    base_temperature: float = 0.1,
+    min_temperature: float = 0.01,
+    max_temperature: float = 0.5,
+    theta: float = 0.3,
+) -> float:
+    """Compute per-token dynamic temperature from logit entropy (EDT).
+
+    Implements the core idea from "EDT: Entropy-based Dynamic Temperature
+    Sampling" (arxiv 2403.14541): instead of a fixed temperature, adaptively
+    set temperature based on the model's uncertainty at each token.
+
+    When the model is confident (low entropy), temperature stays low
+    (near-greedy) to preserve the model's strong preference. When uncertain
+    (high entropy), temperature increases to allow exploration of
+    alternatives that greedy decoding would miss.
+
+    Formula: T = base * norm_factor^(theta / entropy)
+    Where norm_factor = vocab_size (to normalize across different model sizes).
+
+    This is more principled than fixed temperature because:
+    - Confident tokens: greedy is usually right, keep it
+    - Uncertain tokens: greedy might pick a suboptimal path, explore
+
+    Args:
+        logits: Raw logits of shape (vocab_size,)
+        base_temperature: Base temperature (default 0.1)
+        min_temperature: Minimum temperature floor (default 0.01)
+        max_temperature: Maximum temperature cap (default 0.5)
+        theta: Entropy scaling exponent (default 0.3). Higher = more
+            temperature variation between confident and uncertain tokens.
+
+    Returns:
+        Dynamic temperature for this token
+    """
+    # Compute entropy of the token distribution
+    logits_stable = logits - np.max(logits)
+    probs = np.exp(logits_stable)
+    probs = probs / probs.sum()
+    # Avoid log(0)
+    probs_safe = np.clip(probs, 1e-10, None)
+    entropy = -np.sum(probs * np.log(probs_safe))
+
+    if entropy <= 1e-6:
+        return min_temperature
+
+    # Simplified EDT: linear mapping from entropy to temperature.
+    # Low entropy (< 1.0 nats) -> min_temperature (near greedy)
+    # High entropy (> max_entropy nats) -> max_temperature (explore)
+    # Linear interpolation in between.
+    #
+    # Original EDT formula T = base * N^(theta/H) has numerical issues
+    # (overflow when H -> 0). This linear version preserves the key insight:
+    # confident tokens stay near-greedy, uncertain tokens explore.
+    max_entropy = np.log(float(len(logits)))  # Maximum possible entropy
+    low_entropy_threshold = 1.0  # Below this -> minimum temp
+    high_entropy_threshold = min(max_entropy * 0.5, 5.0)  # Above -> max temp
+
+    if entropy <= low_entropy_threshold:
+        return min_temperature
+    elif entropy >= high_entropy_threshold:
+        return max_temperature
+    else:
+        # Linear interpolation
+        t = (entropy - low_entropy_threshold) / (high_entropy_threshold - low_entropy_threshold)
+        return min_temperature + t * (max_temperature - min_temperature)
+
+
 def dynamic_border_distance(
     src_attn: np.ndarray,
     ts_scores: List[float],

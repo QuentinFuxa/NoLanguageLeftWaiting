@@ -363,6 +363,17 @@ def validate_novel_features():
     gated = entropy_gated_top_p_threshold(0.85, m_ent)
     ok &= check("entropy_gated_top_p_threshold computes", 0.5 <= gated <= 0.99, f"gated={gated:.3f}")
 
+    # Iteration 25: generation temperature + confidence trimming
+    ok &= check("generation_temperature field", hasattr(cfg, 'generation_temperature'))
+    ok &= check("generation_temperature default=0.0", cfg.generation_temperature == 0.0)
+    ok &= check("confidence_trim_threshold field", hasattr(cfg, 'confidence_trim_threshold'))
+    ok &= check("confidence_trim_threshold default=None", cfg.confidence_trim_threshold is None)
+    from nllw.alignatt import sample_with_temperature, trim_low_confidence_tokens
+    tok = sample_with_temperature(np.array([1.0, 5.0, 2.0]), 0.0)
+    ok &= check("sample_with_temperature greedy", tok == 1)
+    trimmed = trim_low_confidence_tokens([1, 2, 3], [-0.5, -5.0, -6.0], threshold=-3.0)
+    ok &= check("trim_low_confidence_tokens works", trimmed == [1], f"got {trimmed}")
+
     return ok
 
 
