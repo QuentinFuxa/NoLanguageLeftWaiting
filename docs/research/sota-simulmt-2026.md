@@ -91,6 +91,25 @@ Research compiled 2026-03-20, updated with March 2026 findings (iteration 10 upd
 11. **Human-Like Strategies (Jan 2026)** -- SENTENCE_CUT, DROP, PRONOMINALIZATION actions.
     https://arxiv.org/abs/2601.11002
 
+12. **RASST Retrieval-Augmented SimulST (Jan 2026)** -- Lightweight speech-text retriever does sliding-window
+    terminology lookup during streaming. +3 BLEU on EN-ZH/DE/JA, +16% terminology accuracy, 16% compute overhead.
+    **Highly relevant for IWSLT 2026 "Extra Context" subtrack** (ACL paper PDFs provided).
+    https://arxiv.org/abs/2601.22777
+
+### Iteration 13 Research Update (March 2026)
+
+13. **SimulU (March 2026)** -- Training-free policy using cross-attention in pretrained E2E models.
+    Validates our training-free attention-based approach philosophy. 8 MuST-C languages.
+    https://arxiv.org/abs/2603.16924
+
+14. **Better Late Than Never -- LongYAAL meta-evaluation (2025)** -- LongYAAL > StreamLAAL (93% vs 82% accuracy).
+    SoftSegmenter significantly improves alignment quality for long-form evaluation.
+    https://arxiv.org/abs/2509.17349
+
+15. **Cross-attention analysis validates multi-head aggregation (2025)** -- Cross-attention scores align with
+    saliency explanations when aggregated across heads/layers. Confirms our approach.
+    https://arxiv.org/abs/2509.18010
+
 ---
 
 ## Detailed Paper Findings (Iteration 4, 2026-03-20)
