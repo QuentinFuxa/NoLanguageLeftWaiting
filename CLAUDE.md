@@ -147,7 +147,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ## Project State (2026-03-21)
 
-### What exists now: ~15,000 lines across 30 SimulMT modules, 928 tests
+### What exists now: ~15,500 lines across 30 SimulMT modules, 955 tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -252,6 +252,10 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `perplexity_bd_low` | 2.0 | Below this ppl -> bd-1 (confident, lower latency) |
 | `perplexity_bd_high` | 5.0 | Above this ppl -> bd+1 (uncertain, safer) |
 | `source_aware_batching` | False | Defer translate() when batch ends on function word (the, of, in...). Novel |
+| `confidence_adaptive_wb` | False | Adjust wb from prev avg_logprob: confident=wb-1, uncertain=wb+1. Novel |
+| `confidence_wb_high` | -0.5 | Above this logprob -> reduce wb (confident). Range: -2.0 to 0.0 |
+| `confidence_wb_low` | -2.0 | Below this logprob -> increase wb (uncertain). Range: -5.0 to -1.0 |
+| `language_pair_gen_cap` | False | Adjust gen cap from known src/tgt compression ratio. EN-ZH=0.85, EN-DE=1.15 |
 | `signal_fusion` | False | Weighted signal fusion mode (replaces boolean cascade). Novel |
 | `fusion_threshold` | 0.0 | Fusion decision threshold. 0.0=balanced, positive=conservative |
 | `gen_cap` | adaptive | `n_src` (short) or `n_src*1.5` (long) |

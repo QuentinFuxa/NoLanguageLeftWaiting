@@ -40,6 +40,8 @@ from .alignatt import (
     check_border_shift_k,
     compute_attention_shift,
     compute_dynamic_word_batch,
+    confidence_adaptive_word_batch,
+    language_pair_gen_cap,
     should_defer_batch,
     compute_entropy,
     compute_entropy_change,
@@ -216,6 +218,8 @@ class AlignAttBackend(SimulMTBackend):
         # Perplexity-based adaptive border (Hibiki-inspired)
         self._prev_gen_perplexity: Optional[float] = None  # Avg ppl from last translate()
         self._perplexity_bd_delta: int = 0  # Current bd adjustment from perplexity
+        # Confidence-adaptive word batching (novel)
+        self._prev_avg_logprob: Optional[float] = None  # Avg logprob from last translate()
         # Optional trace collector for fusion calibration
         self._trace_collector = None
 
@@ -273,6 +277,15 @@ class AlignAttBackend(SimulMTBackend):
             if self.config.dynamic_word_batch:
                 effective_wb = compute_dynamic_word_batch(
                     effective_wb, len(self._source_words)
+                )
+
+            # Confidence-adaptive word batching (applied on top of dynamic wb)
+            if self.config.confidence_adaptive_wb:
+                effective_wb = confidence_adaptive_word_batch(
+                    effective_wb,
+                    self._prev_avg_logprob,
+                    high_threshold=self.config.confidence_wb_high,
+                    low_threshold=self.config.confidence_wb_low,
                 )
 
             # Word batching: skip until we have enough words
@@ -396,6 +409,15 @@ class AlignAttBackend(SimulMTBackend):
             new_ids = []
             stopped_at_border = False
             is_final_step = is_final
+            # Language-pair-aware gen cap: tighter cap for compact targets
+            if self.config.language_pair_gen_cap and num_src_tokens > 0:
+                parts = self.config.direction.split("-")
+                if len(parts) == 2:
+                    lp_cap = language_pair_gen_cap(
+                        num_src_tokens, parts[0], parts[1]
+                    )
+                    effective_gen_cap = min(effective_gen_cap, lp_cap)
+
             max_gen = effective_gen_cap if not is_final_step else 256
             consecutive_border_hits = 0  # For border confirmation
             self._gen_positions_history = []  # Reset per translate() call
@@ -617,6 +639,10 @@ class AlignAttBackend(SimulMTBackend):
                     log_probs = logits_stable - np.log(np.sum(np.exp(logits_stable)))
                     avg_logprob = float(np.mean([log_probs[tid] for tid in new_ids[-3:]]))
 
+            # Update confidence tracking for confidence-adaptive word batching
+            if avg_logprob is not None:
+                self._prev_avg_logprob = avg_logprob
+
             # Decode text: full sequence to avoid byte-fallback mojibake
             prev_text = (
                 ll.tokens_to_text(self._vocab, self._committed_ids, errors="ignore")
@@ -772,6 +798,7 @@ class AlignAttBackend(SimulMTBackend):
         self._gen_positions_history = []
         self._prev_gen_perplexity = None
         self._perplexity_bd_delta = 0
+        self._prev_avg_logprob = None
 
         if self._ctx is not None:
             ll.free_context(self._ctx)

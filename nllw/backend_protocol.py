@@ -171,6 +171,25 @@ class BackendConfig:
     # source word. Large shift = consuming source (WRITE). Small = stuck (READ).
     # False=disabled, True=enabled.
     attention_shift: bool = False
+    # Language-pair-aware generation cap: adjust max tokens per step based
+    # on the known source/target compression ratio. EN->ZH produces fewer
+    # tokens (compact), EN->DE produces more (compounds). Prevents both
+    # overgeneration and undergeneration. False=use fixed max_new_per_step.
+    language_pair_gen_cap: bool = False
+    # Confidence-adaptive word batching (novel): adjust effective word_batch
+    # based on generation confidence from the PREVIOUS translate() call.
+    # Uses avg_logprob (iter 22): confident generation -> reduce wb by 1
+    # (faster emission, lower YAAL), uncertain -> increase wb by 1 (more
+    # source context, better quality). No published work on confidence-based
+    # batch size adaptation for SimulMT.
+    # False=disabled, True=enabled.
+    confidence_adaptive_wb: bool = False
+    # Log-probability threshold for "confident" (reduce wb). Above this = wb-1.
+    # Range: -2.0 to 0.0. Higher (closer to 0) = more selective.
+    confidence_wb_high: float = -0.5
+    # Log-probability threshold for "uncertain" (increase wb). Below this = wb+1.
+    # Range: -5.0 to -1.0. Lower = more selective.
+    confidence_wb_low: float = -2.0
     # Signal fusion mode: replace boolean cascade with weighted scoring.
     # When enabled, all signals produce continuous scores in [-1, +1] and
     # a weighted sum determines the border decision. Per-direction tunable.
