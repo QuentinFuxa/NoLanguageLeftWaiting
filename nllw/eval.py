@@ -263,9 +263,15 @@ def evaluate_backend(
         avg_time_per_sentence_ms=(total_time / n * 1000) if n else 0,
     )
 
-    # Compute BLEU
+    # Compute BLEU (use language-appropriate tokenizer for CJK)
+    tgt_lang = None
+    if hasattr(backend, 'config') and hasattr(backend.config, 'direction'):
+        parts = backend.config.direction.split("-")
+        if len(parts) == 2:
+            tgt_lang = parts[1]
     try:
-        result.bleu = compute_bleu_corpus(hypotheses, references)
+        result.bleu = compute_bleu_corpus(hypotheses, references,
+                                          target_lang=tgt_lang)
     except Exception as e:
         print(f"  BLEU computation failed: {e}", file=sys.stderr)
         result.bleu = 0.0

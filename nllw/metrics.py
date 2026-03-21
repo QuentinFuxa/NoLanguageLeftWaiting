@@ -274,21 +274,32 @@ def compute_normalized_erasure_text(
     return total_erasure / (len(revision_history) - 1)
 
 
-def compute_bleu(hypothesis: str, reference: str) -> float:
+def _bleu_tokenize(target_lang: Optional[str] = None) -> str:
+    """Pick sacrebleu tokenizer: 'zh' for Chinese/Japanese, default otherwise."""
+    if target_lang in ("zh", "ja"):
+        return "zh"
+    return "13a"
+
+
+def compute_bleu(hypothesis: str, reference: str,
+                 target_lang: Optional[str] = None) -> float:
     """Compute sentence-level BLEU using sacrebleu."""
     try:
         import sacrebleu
-        result = sacrebleu.sentence_bleu(hypothesis, [reference])
+        tok = _bleu_tokenize(target_lang)
+        result = sacrebleu.sentence_bleu(hypothesis, [reference], tokenize=tok)
         return result.score
     except ImportError:
         raise ImportError("sacrebleu required for BLEU. Install: pip install sacrebleu")
 
 
-def compute_bleu_corpus(hypotheses: List[str], references: List[str]) -> float:
+def compute_bleu_corpus(hypotheses: List[str], references: List[str],
+                        target_lang: Optional[str] = None) -> float:
     """Compute corpus-level BLEU."""
     try:
         import sacrebleu
-        result = sacrebleu.corpus_bleu(hypotheses, [references])
+        tok = _bleu_tokenize(target_lang)
+        result = sacrebleu.corpus_bleu(hypotheses, [references], tokenize=tok)
         return result.score
     except ImportError:
         raise ImportError("sacrebleu required for BLEU. Install: pip install sacrebleu")

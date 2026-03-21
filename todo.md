@@ -382,6 +382,31 @@
   - Translation Heads (ICLR 2026): validates our TS-scoring head detection
 - [x] All tests pass (731+)
 
+## DONE -- Iteration 15: First FLORES Benchmarks + Critical Bug Fixes
+
+- [x] **FLORES EN-ZH parameter sweep** (9 configs, COMET scoring):
+  - Best quality: bd=2 wb=3 -> COMET=0.879, YAAL=3.60
+  - Best BLEU: bd=5 wb=3 -> BLEU=37.4, YAAL=4.43
+  - wb=3 >> wb=2 >> wb=1 for both quality and speed
+- [x] **Multi-direction benchmarks with cross-lingual head transfer**:
+  - EN-DE: bd=3 wb=3 -> BLEU=25.4, COMET=0.853, YAAL=4.33
+  - EN-IT: bd=4 wb=3 -> BLEU=20.5, COMET=0.863, YAAL=5.12
+  - Using EN-ZH heads via validated >97% TS mass transfer
+- [x] **Critical bug fix: empty translations** (`simulate.py`):
+  - `_handle_segment_end()` cleared committed_ids before `get_full_translation()`
+  - Fixed: accumulate step texts as fallback
+- [x] **Critical bug fix: Chinese BLEU = 0** (`metrics.py`):
+  - sacrebleu default tokenizer can't segment CJK characters
+  - Fixed: `tokenize="zh"` for Chinese/Japanese targets
+- [x] **Critical bug fix: KV cache always on CPU** (`llama_backend.py`):
+  - `create_context()` hardcoded n_gpu_layers=0 in shim call
+  - Fixed: wire n_gpu_layers from config (graph_splits 66 -> 2)
+- [x] **Cross-lingual head fallback** (`alignatt_backend.py`):
+  - HY-MT EN-DE/IT/CS had no head configs
+  - Fall back to same-model configs (validated >97% TS mass transfer)
+- [x] Signal fusion + cascade experiments running on A40
+- [x] 746 unit tests (15 new, all passing)
+
 ## TODO -- Infrastructure
 
 - [x] Web debug server (FastAPI + embedded UI) -- `web_debug/server.py` (port 8777)
@@ -401,7 +426,9 @@
 
 ## TODO -- Experiments to Run
 
-- [ ] **First E2E validation on A40**: HY-MT1.5-7B on FLORES EN-ZH with AlignAtt
+- [x] **First E2E validation on A40**: HY-MT1.5-7B on FLORES EN-ZH with AlignAtt (iteration 14)
+- [x] **FLORES EN-ZH parameter sweep** (iteration 15): bd={2-5} x wb={1-3}, best COMET=0.879 at bd=2/wb=3
+- [x] **Multi-direction benchmarks** (iteration 15): EN-DE COMET=0.853, EN-IT COMET=0.863 (with cross-lingual head transfer)
 - [ ] Compare AlignAtt vs wait-k vs full-sentence on FLORES mini
 - [ ] Test Qwen3.5-4B with context injection (Qwen3.5 benefits +0.037)
 - [ ] Multi-direction sweep: en-zh, en-de, en-it, cs-en

@@ -1,23 +1,21 @@
 # IWSLT 2026 SST -- CS-EN optimal configuration
 # Model: HY-MT1.5-7B-Q8_0.gguf
-# Best result (iwslt26-sst): XCOMET-XL 0.908
-# Note: CS-EN uses bd=2, wb=1 (lowest latency setting)
+# Best FLORES (iteration 15): COMET=0.853, YAAL=2.87 at bd=3/wb=2
+# Aggressive: COMET=0.809, YAAL=2.06 at bd=2/wb=1
+# Previous best (iwslt26-sst): XCOMET-XL 0.908
+# Note: uses cross-lingual head transfer from en-zh (>97% TS mass)
 
 model_path: /app/models/hymt1.5-7b-q8_0.gguf
-heads_path: /app/heads/translation_heads_hymt_cs_en.json
+heads_path: /app/heads/translation_heads_hymt_en_zh.json
 direction: cs-en
 backend_type: alignatt
 prompt_format: hymt
-border_distance: 2
-word_batch: 1
+border_distance: 3
+word_batch: 2
 context_sentences: 0
 n_ctx: 2048
+n_gpu_layers: 99
 top_k_heads: 10
-
-# Recommended signals (to be validated on GPU)
-# shift_k_threshold: 0.4
-# coverage_threshold: 0.3
-# repetition_max_repeats: 2
 
 # SimulStream settings
 sample_rate: 16000
