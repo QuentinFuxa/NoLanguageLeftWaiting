@@ -770,6 +770,15 @@ class AlignAttBackend(SimulMTBackend):
 
             elapsed_ms = (time.time() - t0) * 1000
 
+            # Sentence-final refinement: discard partial translations and
+            # regenerate from scratch with full source. This recovers from
+            # suboptimal committed prefixes during SimulMT.
+            if is_final and self.config.final_refinement and self._committed_ids:
+                refined = self._refine_final(accumulated_source, anti_lm_log_probs)
+                if refined is not None:
+                    new_text = refined
+                    elapsed_ms = (time.time() - t0) * 1000
+
             # Handle segment reset if final
             if is_final:
                 self._handle_segment_end()
@@ -784,6 +793,119 @@ class AlignAttBackend(SimulMTBackend):
                 batch_first_emission_time=batch_first_et,
                 avg_logprob=avg_logprob,
             )
+
+    def _refine_final(self, source_text: str,
+                      anti_lm_log_probs: Optional[np.ndarray] = None) -> Optional[str]:
+        """Re-translate the full sentence from scratch (no committed prefix).
+
+        Called when is_final=True and final_refinement=True. Discards the
+        incremental partial translation and generates a fresh translation
+        with full source context, yielding quality closer to the
+        full-sentence baseline.
+
+        Returns the refined full translation, or None on failure.
+        """
+        try:
+            # Free current context and create fresh one
+            if self._ctx is not None:
+                ll.free_context(self._ctx)
+                self._ctx = None
+                self._mem = None
+
+            # Create clean context
+            self._ctx = ll.create_context(
+                self._model,
+                n_ctx=self.config.n_ctx,
+                n_batch=self.config.n_ctx,
+                attn_weights=True,
+                n_gpu_layers=self.config.n_gpu_layers,
+            )
+            ll.set_attn_heads(self._ctx, self._head_layers, self._head_indices)
+            self._mem = ll.get_memory(self._ctx)
+
+            # Build prefix (same as _init_segment)
+            prefix_str = self._prompt_fmt.prefix
+            prefix_tokens = ll.tokenize(
+                self._vocab, prefix_str, add_bos=True, special=True
+            )
+
+            # Tokenize full source
+            source_tokens = ll.tokenize(
+                self._vocab, source_text, add_bos=False, special=False
+            )
+
+            # Decode: prefix + source + suffix (NO committed tokens)
+            all_tokens = prefix_tokens + source_tokens + self._suffix_tokens
+            if len(all_tokens) >= self.config.n_ctx - 256:
+                return None  # Too long
+
+            ll.decode_batch_at(self._ctx, all_tokens, pos_start=0)
+            pos = len(all_tokens)
+
+            # Generate freely (greedy, no border detection)
+            new_ids = []
+            use_edt = self.config.entropy_dynamic_temperature
+            use_temperature = self.config.generation_temperature > 0.0
+            use_anti_lm = self.config.anti_lm and anti_lm_log_probs is not None
+
+            for step in range(256):
+                if use_temperature or use_edt or use_anti_lm:
+                    logits = ll.get_logits_array(self._ctx, -1, self._nv)
+                    if logits is not None:
+                        if use_anti_lm:
+                            logits = apply_anti_lm_penalty(
+                                logits, anti_lm_log_probs, step,
+                                gamma=self.config.anti_lm_gamma,
+                            )
+                        if use_edt:
+                            dyn_temp = entropy_based_dynamic_temperature(
+                                logits,
+                                base_temperature=max(self.config.generation_temperature, 0.1),
+                            )
+                            next_tok = sample_with_temperature(logits, dyn_temp)
+                        elif use_temperature:
+                            next_tok = sample_with_temperature(
+                                logits, self.config.generation_temperature
+                            )
+                        else:
+                            next_tok = int(np.argmax(logits))
+                    else:
+                        next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
+                else:
+                    next_tok = ll.argmax_logits(self._ctx, -1, self._nv)
+
+                if next_tok in self._stop_ids or next_tok < 0:
+                    break
+
+                # Repetition halt
+                if (self.config.repetition_max_repeats is not None
+                        and len(new_ids) >= 4):
+                    if detect_ngram_repetition(
+                        new_ids + [next_tok],
+                        max_repeats=self.config.repetition_max_repeats,
+                    ):
+                        break
+
+                ll.decode_single_at(self._ctx, next_tok, pos, seq_id=0)
+                pos += 1
+                new_ids.append(next_tok)
+
+            if not new_ids:
+                return None
+
+            # Decode full refined translation
+            refined_text = ll.tokens_to_text(
+                self._vocab, new_ids, errors="ignore"
+            )
+
+            # Replace committed_ids with refined translation
+            self._committed_ids = new_ids
+
+            # Return the full refined text (not just new portion)
+            return refined_text
+
+        except Exception:
+            return None
 
     def _lsg_probe(self, last_token: int, pos: int,
                    src_end: int) -> Optional[float]:

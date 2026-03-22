@@ -92,12 +92,17 @@ def score_from_eval_json(
         data = json.load(f)
 
     per_sentence = data.get("per_sentence", [])
-    if not per_sentence:
-        raise ValueError(f"No per_sentence data in {input_path}")
-
-    sources = [s["source"] for s in per_sentence]
-    hypotheses = [s["hypothesis"] for s in per_sentence]
-    references = [s["reference"] for s in per_sentence]
+    if per_sentence:
+        sources = [s["source"] for s in per_sentence]
+        hypotheses = [s["hypothesis"] for s in per_sentence]
+        references = [s["reference"] for s in per_sentence]
+    elif "sources" in data and "hypotheses" in data and "references" in data:
+        # Hypothesis file format (from bench --save-hypotheses)
+        sources = data["sources"]
+        hypotheses = data["hypotheses"]
+        references = data["references"]
+    else:
+        raise ValueError(f"No per_sentence or sources/hypotheses/references data in {input_path}")
 
     return score_xcomet(sources, hypotheses, references, model_name, batch_size)
 

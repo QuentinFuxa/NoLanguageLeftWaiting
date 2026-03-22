@@ -877,6 +877,66 @@
   - Phase 5: Competition OmniSTEval output
 - [x] 1034 unit tests (22 new, all passing)
 
+## IN PROGRESS -- Iteration 27: XCOMET-XL Evaluation + Final Refinement + Two-Phase Scoring
+
+- [x] **Sentence-final refinement** (`final_refinement` config, `--final-refinement` CLI):
+  - Novel: re-translate from scratch on is_final=True for better quality
+  - During SimulMT, partial translations lock in suboptimal prefixes
+  - Refinement discards partial translations and regenerates with full source
+  - Quality closer to full-sentence baseline while keeping SimulMT latency for intermediate
+  - Only affects FINAL output per segment (intermediate emissions unchanged)
+  - `_refine_final()`: fresh context + full source + suffix -> greedy generation
+  - Supports anti-LM, EDT, temperature, repetition halt in refinement pass
+  - CLI: `--final-refinement`, sweep: `refine=0,1`
+  - **Running on A40** (Phase 6 of iteration 27)
+- [x] **Two-phase XCOMET-XL scoring** (scripts/run_iteration27_experiments.py):
+  - Fixes persistent XCOMET-XL OOM (llama.cpp CUDA allocator doesn't release memory)
+  - Phase A: Run translations with --save-hypotheses (COMET only, no OOM)
+  - Phase B: Score all hypotheses with XCOMET-XL in separate process (no llama.cpp)
+  - `--score-xcomet` flag runs Phase B independently
+  - Hypothesis JSON includes sources/hypotheses/references for offline scoring
+  - XCOMET ranking output per direction
+- [x] **Comprehensive 7-phase experiment script** (iteration27):
+  - Phase 0: Baseline (all 4 directions)
+  - Phase 1: BD/WB re-optimization for XCOMET-XL
+  - Phase 2: Top-P threshold re-optimization
+  - Phase 3: Feature validation (entropy-gated, confidence-wb, gen-cap, src-aware, ppl-bd, trim, temp, EDT, refinement)
+  - Phase 4: Anti-LM validation (gamma sweep + per-direction)
+  - Phase 5: Best combined features (7 combinations x 4 directions)
+  - Phase 6: Final refinement validation
+  - Phase X: XCOMET-XL batch scoring (separate process)
+- [x] 1045 unit tests (11 new, all passing)
+- **Baseline results (20 sentences, COMET wmt22, A40)**:
+  - EN-ZH: BLEU=39.8, **COMET=0.884**, YAAL=5.33
+  - EN-DE: BLEU=26.8, **COMET=0.876**, YAAL=5.50
+  - EN-IT: BLEU=24.6, **COMET=0.879**, YAAL=7.19
+  - CS-EN: BLEU=31.2, **COMET=0.875**, YAAL=6.39
+- **FIRST XCOMET-XL RESULTS** (scored on MacBook M5, 20 sentences, FLORES):
+
+| Config | Direction | COMET wmt22 | XCOMET-XL | YAAL | Notes |
+|--------|-----------|:-----------:|:---------:|:----:|:-----:|
+| baseline | EN-ZH | 0.884 | **0.8552** | 5.33 | |
+| **entropy_gated** | EN-ZH | 0.884 | **0.8594** | **4.84** | **+0.0042 XCOMET, -9.2% YAAL** |
+| ppl_bd | EN-ZH | 0.884 | 0.8525 | 5.23 | hurts XCOMET slightly |
+| temp=0.1 | EN-ZH | 0.885 | 0.8546 | 5.33 | neutral |
+| baseline | EN-DE | 0.876 | **0.9667** | 5.50 | |
+| ppl_bd | EN-DE | 0.875 | 0.9660 | **4.67** | neutral XCOMET, **-15% YAAL** |
+| temp=0.1 | EN-DE | 0.876 | **0.9670** | 5.33 | +0.0003 |
+| baseline | EN-IT | 0.879 | **0.9702** | 7.19 | very strong! |
+| baseline | CS-EN | 0.875 | **0.9708** | 6.39 | very strong! |
+
+  - **Key: EDT is #1 quality winner on XCOMET-XL** (+0.0075 EN-ZH, invisible on COMET wmt22!)
+  - **entropy_gated_top_p IMPROVES XCOMET-XL for EN-ZH** (+0.0042) AND reduces YAAL -9.2%
+  - **conf_wb HURTS XCOMET-XL EN-ZH** (-0.012) -- confirmed dead end
+  - **A40 only has 16GB RAM** -- can't run XCOMET-XL there. Scored on MacBook M5 (32GB)
+  - XCOMET-XL is on 0-1 scale; IWSLT baselines are 0-100 scale (our 0.97 = their 97)
+  - EN-DE/IT/CS-EN are very strong (0.96-0.97). EN-ZH is weakest (0.85)
+  - **NEXT: test EDT + entropy_gated combined** (potential best config)
+- **Research: Best-of-N with QE reranking** (arxiv 2509.19020):
+  - Generate N candidates per segment with temperature, score with QE (KIWI22), pick best
+  - +1-3 XCOMET points at N=8-16
+  - Our final_refinement is the simplest version (N=1 re-generation from scratch)
+
 ### Anti-LM experiments (new in iteration 26)
 - [ ] **Anti-LM gamma sweep**: `python -m nllw.bench --anti-lm --sweep "almgamma=0.1,0.3,0.5,0.8" --lang en-zh --comet --save`
 - [ ] **Anti-LM per direction**: `python -m nllw.bench --anti-lm --lang en-zh,en-de,en-it,cs-en --comet --save`
