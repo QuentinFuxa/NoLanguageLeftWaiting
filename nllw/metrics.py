@@ -274,6 +274,98 @@ def compute_normalized_erasure_text(
     return total_erasure / (len(revision_history) - 1)
 
 
+def bootstrap_confidence_interval(
+    scores: List[float],
+    n_bootstrap: int = 1000,
+    confidence: float = 0.95,
+    seed: int = 42,
+) -> Tuple[float, float, float]:
+    """Compute bootstrap confidence interval for a metric.
+
+    Uses the percentile method to estimate confidence intervals for the mean
+    of per-sentence scores. This is the standard approach used by COMET and
+    other MT evaluation tools.
+
+    Args:
+        scores: Per-sentence metric scores
+        n_bootstrap: Number of bootstrap samples
+        confidence: Confidence level (0.95 = 95% CI)
+        seed: Random seed for reproducibility
+
+    Returns:
+        (mean, lower_bound, upper_bound) -- the point estimate and CI bounds
+    """
+    import numpy as np
+    rng = np.random.RandomState(seed)
+
+    n = len(scores)
+    if n == 0:
+        return 0.0, 0.0, 0.0
+
+    scores_arr = np.array(scores, dtype=np.float64)
+    mean = float(scores_arr.mean())
+
+    # Bootstrap: resample with replacement, compute mean of each sample
+    boot_means = np.empty(n_bootstrap, dtype=np.float64)
+    for i in range(n_bootstrap):
+        sample = rng.choice(scores_arr, size=n, replace=True)
+        boot_means[i] = sample.mean()
+
+    # Percentile method
+    alpha = 1.0 - confidence
+    lower = float(np.percentile(boot_means, 100 * alpha / 2))
+    upper = float(np.percentile(boot_means, 100 * (1 - alpha / 2)))
+
+    return mean, lower, upper
+
+
+def paired_bootstrap_test(
+    scores_a: List[float],
+    scores_b: List[float],
+    n_bootstrap: int = 1000,
+    seed: int = 42,
+) -> Tuple[float, float]:
+    """Paired bootstrap significance test between two systems.
+
+    Tests whether system A is significantly better than system B using
+    the paired bootstrap resampling test (Koehn, 2004).
+
+    Args:
+        scores_a: Per-sentence scores for system A
+        scores_b: Per-sentence scores for system B
+        n_bootstrap: Number of bootstrap samples
+        seed: Random seed
+
+    Returns:
+        (delta_mean, p_value) -- mean difference (A-B) and p-value.
+        p < 0.05 means the difference is statistically significant.
+    """
+    import numpy as np
+    rng = np.random.RandomState(seed)
+
+    n = len(scores_a)
+    if n != len(scores_b):
+        raise ValueError(f"Score lists must have same length: {n} vs {len(scores_b)}")
+    if n == 0:
+        return 0.0, 1.0
+
+    a = np.array(scores_a, dtype=np.float64)
+    b = np.array(scores_b, dtype=np.float64)
+    deltas = a - b
+    observed_delta = float(deltas.mean())
+
+    # Count how many bootstrap samples have delta <= 0 (A not better than B)
+    count_not_better = 0
+    for _ in range(n_bootstrap):
+        indices = rng.randint(0, n, size=n)
+        boot_delta = deltas[indices].mean()
+        if boot_delta <= 0:
+            count_not_better += 1
+
+    p_value = count_not_better / n_bootstrap
+    return observed_delta, p_value
+
+
 def _bleu_tokenize(target_lang: Optional[str] = None) -> str:
     """Pick sacrebleu tokenizer: 'zh' for Chinese/Japanese, default otherwise."""
     if target_lang in ("zh", "ja"):

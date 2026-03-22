@@ -38,14 +38,14 @@ nllw/
 
 ### Best Known Results
 
-**NLLW results (COMET wmt22-comet-da, FLORES, 100 sentences, A40, iteration 17):**
+**NLLW results (COMET wmt22-comet-da, FLORES, 100 sentences, A40, iteration 18):**
 
-| Direction | Model | COMET | YAAL | Config | % offline |
-|-----------|-------|:-----:|:----:|--------|:---------:|
-| EN-ZH | HY-MT1.5-7B | **0.896** | 6.00 | bd=3, wb=4, top_p, p=0.85 | **100.0%** |
-| EN-DE | HY-MT1.5-7B | **0.881** | 5.55 | bd=2, wb=3, top_p, p=0.75 | 99.7% |
-| EN-IT | HY-MT1.5-7B | **0.891** | 5.94 | bd=2, wb=3, top_p, p=0.9 | **100.2%** |
-| CS-EN | HY-MT1.5-7B | **0.876** | 6.03 | bd=3, wb=3, top_p, p=0.9 | 99.4% |
+| Direction | Model | COMET | 95% CI | YAAL | Config | % offline |
+|-----------|-------|:-----:|--------|:----:|--------|:---------:|
+| EN-ZH | HY-MT1.5-7B | **0.894** | [0.887, 0.901] | 6.09 | bd=3, wb=4, top_p, p=0.85 | 99.8% |
+| EN-DE | HY-MT1.5-7B | **0.881** | [0.873, 0.890] | 5.45 | bd=2, wb=3, top_p, p=0.75 | 99.7% |
+| EN-IT | HY-MT1.5-7B | **0.891** | [0.882, 0.899] | 6.76 | bd=2, wb=3, top_p, p=0.9 | **100.2%** |
+| CS-EN | HY-MT1.5-7B | **0.879** | [0.871, 0.886] | 5.81 | bd=3, wb=3, top_p, p=0.9 | 99.8% |
 
 **Previous iwslt26-sst results (XCOMET-XL, different metric):**
 
@@ -73,6 +73,7 @@ nllw/
 - Boolean cascade signals (coverage causes latency explosion)
 - Repetition halt (rep=2 hurts EN-ZH by -0.004 COMET, neutral for EN-DE)
 - top_p_weighted aggregation (COMET 0.885 EN-ZH, 0.852 EN-DE -- much worse than top_p)
+- Qwen3.5-9B (hybrid DeltaNet architecture: only 25% of layers have softmax attention, AlignAtt unusable)
 
 ---
 
@@ -144,9 +145,9 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ---
 
-## Project State (2026-03-20)
+## Project State (2026-03-21)
 
-### What exists now: ~13,000 lines across 28 SimulMT modules, 755 tests
+### What exists now: ~14,000 lines across 29 SimulMT modules, 810+ tests
 
 **7 translation backends (registered):**
 | Backend | Type | File | Purpose |
@@ -180,6 +181,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `simulstream.py` | 420 | SimulStream SpeechProcessor wrapper for IWSLT 2026 submission |
 | `fusion.py` | 600 | Weighted signal fusion: 8 signals -> continuous scores -> weighted sum -> border decision |
 | `calibrate.py` | 650 | Fusion weight calibration: trace collection, alignment-based labeling, grid search optimization |
+| `xcomet_scorer.py` | 220 | Standalone XCOMET-XL scorer (separate process, avoids OOM) |
 
 **Infrastructure:**
 - `backend_protocol.py` (145 lines) -- SimulMTBackend ABC + `create_backend()` factory + ssbd_beta config
@@ -223,6 +225,7 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 | `entropy_veto_threshold` | None | **Dead end**: all thresholds hurt (0.5->0.494, 1.0->0.683). Do not use. |
 | `aggregation` | "ts_vote" | **top_p is best** (COMET 0.892 vs ts_vote 0.880 at 100 sent). geomean second. 11 methods total. |
 | `top_p_threshold` | 0.8 | Cumulative mass threshold for top_p. **0.85 is best for EN-ZH** (COMET 0.896=offline!). Per-direction: EN-ZH=0.85, EN-DE=0.75, EN-IT=0.9, CS-EN=0.9 |
+| `adaptive_top_p` | False | Per-sentence threshold from source complexity. Simple->lower, complex->higher. All 4 dirs: -0.001/-0.002 COMET, -0.37 to -0.70 YAAL (6-12% latency reduction) |
 | `dynamic_border` | False | When True, adjusts bd per-token based on attention entropy |
 | `prompt_format` | "hymt" | Auto-detected from model filename |
 | `ssbd_beta` | None | SSBD bias for LA backend. None=disabled, 0.0=pure speculative, 0.2=recommended |
@@ -258,23 +261,15 @@ Rebuild the messy iwslt26-sst experimental repo into a clean, structured SimulMT
 
 ### Quality metrics (2026-03-21, FLORES, A40, COMET wmt22-comet-da)
 
-**100-sentence confirmed results (iteration 17, top_p, p=0.8):**
-| Direction | bd | wb | agg | BLEU | COMET | YAAL | % of offline |
-|-----------|---:|---:|-----|-----:|------:|-----:|:------------:|
-| **EN-ZH** | 3 | 4 | top_p | 39.9 | **0.892** | 5.84 | 99.6% |
-| **EN-DE** | 2 | 3 | top_p | 27.8 | **0.881** | 5.78 | 99.7% |
-| **EN-IT** | 2 | 3 | top_p | 24.5 | **0.890** | 5.76 | **100.1%** |
-| **CS-EN** | 3 | 3 | top_p | 27.5 | **0.877** | 4.90 | 99.5% |
+**100-sentence confirmed results (iteration 18, tuned p_threshold with CI):**
+| Direction | bd | wb | p | BLEU | COMET | 95% CI | YAAL | % of offline |
+|-----------|---:|---:|:-:|-----:|------:|--------|-----:|:------------:|
+| **EN-ZH** | 3 | 4 | 0.85 | 40.0 | **0.894** | [0.887, 0.901] | 6.09 | 99.8% |
+| **EN-DE** | 2 | 3 | 0.75 | 27.9 | **0.881** | [0.873, 0.890] | 5.45 | 99.7% |
+| **EN-IT** | 2 | 3 | 0.9 | 24.3 | **0.891** | [0.882, 0.899] | 6.76 | **100.2%** |
+| **CS-EN** | 3 | 3 | 0.9 | 28.4 | **0.879** | [0.871, 0.886] | 5.81 | 99.8% |
 
-**Tuned p_threshold results (50-sentence, further improves 2/4 directions):**
-| Direction | p_threshold | COMET | YAAL | vs p=0.8 |
-|-----------|:-----------:|------:|-----:|:--------:|
-| **EN-ZH** | 0.85 | **0.896** | 6.00 | +0.001 (=offline!) |
-| EN-DE | 0.75 | 0.881 | 5.55 | same, lower latency |
-| **EN-IT** | 0.9 | **0.891** | 5.94 | +0.001 |
-| CS-EN | 0.9 | 0.876 | 6.03 | +0.002 |
-
-EN-ZH now **matches offline baseline** (0.896 = 0.896). EN-IT exceeds it (0.891 > 0.889).
+EN-IT **exceeds offline baseline** (0.891 > 0.889). All directions within 0.3% of offline.
 Full-sentence baselines: EN-ZH=0.896, EN-DE=0.884, EN-IT=0.889, CS-EN=0.881.
 
 ### Key findings
@@ -286,8 +281,11 @@ Full-sentence baselines: EN-ZH=0.896, EN-DE=0.884, EN-IT=0.889, CS-EN=0.881.
 - **KV cache reuse**: 3-5x speedup, zero quality loss
 - **Context KILLS HY-MT quality**: -0.084 to -0.125 COMET (dead end)
 - **Entropy veto is dead**: all thresholds hurt quality significantly
+- **Adaptive top_p trades latency for free**: 6-12% YAAL reduction, <0.2% COMET cost (CIs overlap)
+- **Bootstrap CI enables rigorous comparison**: 95% CIs show most differences are not significant
 - **20+ failed experiments documented**: EAST, LoRA, GDN, confidence, signals, etc.
 - **XCOMET-XL amplifies differences 39x vs wmt22** -- use the right metric!
+- **IWSLT 2026 uses COMET wmt22-comet-da** for ranking (confirmed from shared task page)
 
 ---
 

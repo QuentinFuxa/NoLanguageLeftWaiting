@@ -51,7 +51,7 @@ from .alignatt import (
     list_aggregation_methods,
     prediction_stability_supports_write,
 )
-from .complexity import adaptive_params_from_complexity
+from .complexity import adaptive_params_from_complexity, adaptive_top_p_threshold
 from .fusion import fused_border_check, get_fusion_weights
 from .prompts import get_prompt_format, detect_model_family, PromptFormat
 from .backend_protocol import (
@@ -234,6 +234,14 @@ class AlignAttBackend(SimulMTBackend):
                         base_wb=self.config.word_batch,
                         base_gen_cap=self.config.max_new_per_step,
                     )
+                )
+
+            # Adaptive top_p threshold: adjust per-sentence from complexity
+            effective_top_p = self.config.top_p_threshold
+            if self.config.adaptive_top_p and len(self._source_words) >= 2:
+                effective_top_p = adaptive_top_p_threshold(
+                    accumulated_source,
+                    base_threshold=self.config.top_p_threshold,
                 )
 
             # Dynamic word batching (applied on top of complexity)
@@ -488,7 +496,7 @@ class AlignAttBackend(SimulMTBackend):
                                 positions_history=self._gen_positions_history if self.config.attention_monotonicity else None,
                                 monotonicity_enabled=self.config.attention_monotonicity,
                                 attn_shift_write=self._current_attn_shift_write if self.config.attention_shift else None,
-                                top_p_threshold=self.config.top_p_threshold,
+                                top_p_threshold=effective_top_p,
                             )
                             self._prev_step_attn = src_attn.copy()
                         elif self.config.dynamic_border:
@@ -499,7 +507,7 @@ class AlignAttBackend(SimulMTBackend):
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
                                 head_temp_reference=self.config.head_temp_reference,
-                                top_p_threshold=self.config.top_p_threshold,
+                                top_p_threshold=effective_top_p,
                             )
                         else:
                             border_hit = check_border(
@@ -509,7 +517,7 @@ class AlignAttBackend(SimulMTBackend):
                                 adaptive_aggregation=self.config.adaptive_aggregation,
                                 head_temp_normalize=self.config.head_temp_normalize,
                                 head_temp_reference=self.config.head_temp_reference,
-                                top_p_threshold=self.config.top_p_threshold,
+                                top_p_threshold=effective_top_p,
                             )
                         if border_hit:
                             consecutive_border_hits += 1

@@ -3,7 +3,7 @@
 #
 # Hardware: Single NVIDIA H100 80GB
 # Protocol: SimulStream
-# Metrics: LongYAAL (latency) + XCOMET-XL (quality)
+# Metrics: LongYAAL (latency) + COMET wmt22-comet-da (quality, primary)
 # Directions: EN-ZH, EN-DE, EN-IT, CS-EN
 #
 # Build:

@@ -164,6 +164,41 @@ def adaptive_params_from_complexity(
     return effective_bd, effective_wb, effective_gen_cap
 
 
+def adaptive_top_p_threshold(
+    source_text: str,
+    base_threshold: float = 0.8,
+    subword_count: Optional[int] = None,
+) -> float:
+    """Compute adaptive top_p threshold based on source complexity.
+
+    Simple/short sentences get a lower threshold (faster latency, tighter
+    frontier), complex/long sentences get a higher threshold (more
+    conservative, broader frontier for safety).
+
+    The mapping is linear: complexity 0.0 -> base - 0.1, complexity 1.0 ->
+    base + 0.1, capped at [0.5, 0.95].
+
+    Novel approach: no published work on adaptive aggregation thresholds
+    for simultaneous machine translation.
+
+    Args:
+        source_text: The source sentence
+        base_threshold: The baseline top_p_threshold (from config)
+        subword_count: Optional subword token count
+
+    Returns:
+        Adapted threshold in [0.5, 0.95]
+    """
+    profile = estimate_complexity(source_text, subword_count)
+
+    # Map: complexity 0 -> base - 0.1, complexity 0.5 -> base, complexity 1 -> base + 0.1
+    delta = (profile.complexity_score - 0.5) * 0.2
+    threshold = base_threshold + delta
+
+    # Clamp to valid range
+    return max(0.5, min(0.95, threshold))
+
+
 def classify_complexity(score: float) -> str:
     """Classify a complexity score into a human-readable category.
 
